@@ -396,20 +396,14 @@ async function ensureImeiBrowser() {
         imeiBrowser = await puppeteer.launch({
             headless: false,
             executablePath: chromePath,
-            defaultViewport: null,
-            pipe: false,
-            handleSIGINT: false,
-            handleSIGTERM: false,
-            handleSIGHUP: false,
             ignoreDefaultArgs: ['--enable-automation'],
             args: [
                 '--start-maximized',
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--no-first-run',
-                '--no-default-browser-check',
                 '--disable-extensions',
-                '--disable-blink-features=AutomationControlled'
+                '--password-store=basic',
+                '--use-mock-keychain'
             ],
             userDataDir: profilePath
         });
@@ -435,49 +429,109 @@ app.post('/api/check-imei', async (req, res) => {
         const b = await ensureImeiBrowser();
         if (!b) throw new Error("IMEI Brauzeri açmaq mümkün olmadı");
 
-        const page = await b.newPage();
+        // Mövcud səhifələri yoxla, lazım olsa yenisini aç
+        const pages = await b.pages();
+        let page = pages.find(p => p.url().includes('ins.mcqs.az')) || null;
+
+        if (!page) {
+            page = await b.newPage();
+        }
         await page.setDefaultNavigationTimeout(90000);
 
-        console.log('🌐 [IMEI] Səhifəyə giriş edilir...');
-        await page.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'networkidle2' });
+        // ============ 1. LOGIN ============
+        const currentUrl = page.url();
+        if (!currentUrl.includes('ins.mcqs.az') || currentUrl.includes('LogIn')) {
+            console.log('🌐 [IMEI] Login səhifəsinə giriş...');
+            await page.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'networkidle2' });
 
-        const isLoginPage = await page.$('#username');
-        if (isLoginPage) {
-            console.log('✍️ [IMEI] Login olunur...');
-            await page.type('#username', 'aziza_nasirova');
-            await page.type('#password', 'leqal2025');
-            await page.click('#loginbutton');
-            console.log('⏳ [IMEI] Naviqasiya gözlənilir...');
-            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => { });
+            const isLoginPage = await page.$('#username');
+            if (isLoginPage) {
+                console.log('✍️ [IMEI] Login olunur...');
+                await page.type('#username', 'aziza_nasirova');
+                await page.type('#password', 'leqal2025');
+                await page.click('#loginbutton');
+
+                // Sertifikat seçimi və ya naviqasiya gözlənilir
+                console.log('⏳ [IMEI] Sertifikat seçimi / naviqasiya gözlənilir...');
+                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 90000 }).catch(() => { });
+
+                // Login uğurlu oldumu?
+                const stillOnLogin = await page.$('#username');
+                if (stillOnLogin) {
+                    return res.status(401).json({ error: 'Login uğursuz oldu. Sertifikat seçilmədi.' });
+                }
+                console.log('✅ [IMEI] Login uğurlu.');
+            }
         }
 
-        console.log('📡 [IMEI] API sorğusu göndərilir...');
-        const result = await page.evaluate(async (imeiCode) => {
-            try {
-                const response = await fetch("https://ins.mcqs.az/Checks/CheckImeiStatusByCode", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
-                    body: JSON.stringify({ imei: imeiCode })
-                });
-                const data = await response.json();
-                const dataString = typeof data === 'string' ? data : JSON.stringify(data);
-                if (dataString.trim().endsWith('deaktiv olunub.')) return { imeiFee: true };
-                return data;
-            } catch (e) {
-                return { error: 'Fetch xətası: ' + e.message };
-            }
-        }, imei);
+        // ============ 2. INDEX SƏHİFƏSİNƏ KEÇ ============
+        if (!page.url().includes('CreditApplication/Index') && !page.url().includes('CheckImeiStatus')) {
+            console.log('🌐 [IMEI] Index səhifəsinə keçilir...');
+            await page.goto('https://ins.mcqs.az/CreditApplication/Index', { waitUntil: 'networkidle2' });
+        }
 
-        console.log('✅ [IMEI] Nəticə alındı.');
-        await page.close(); // Səhifəni bağlayırıq, amma brauzer açıq qalır
-        res.json(result);
+        // ============ 3. "IMEI Status yoxlanışı" TAB-ına KLİK ET ============
+        console.log('🔘 [IMEI] "IMEI Status yoxlanışı" tabına klik edilir...');
+
+        // data-url atributuna görə tap (şəkil 1-dən)
+        await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 15000 });
+        await page.click('li[data-url*="CheckImeiStatus"] a');
+
+        // Tab yüklənməsini gözlə
+        await new Promise(r => setTimeout(r, 1500));
+
+        // ============ 4 + 5: IMEI YAZ VƏ KLİK ET ============
+        console.log('✍️ [IMEI] IMEI kodu daxil edilir...');
+
+        // Əvvəlcə IMEI-ni URL-ə yazırıq ki evaluate daxilindən oxuya bilək
+        await page.evaluateOnNewDocument('window.__IMEI__ = "' + imei + '"');
+
+        // Yox, daha sadə — addExposeFunction və ya keyboard ilə yazaq
+        // Birbaşa keyboard istifadə edək, heç evaluate lazım deyil:
+
+        await page.click('#getimeicode', { clickCount: 3 }); // mövcud mətni seç
+        await page.keyboard.type(imei); // klaviatura ilə yaz
+
+        console.log('🔍 [IMEI] Butona klik edilir...');
+        await page.click('#checkimeistatus');
+
+        // ============ 6: NƏTİCƏNİ GÖZLƏ ============
+        console.log('⏳ [IMEI] Nəticə gözlənilir...');
+
+        await new Promise(function (r) { setTimeout(r, 1500); });
+
+        var statusText = '';
+
+        try {
+            // Əvvəlcə b tag-ından oxu (şəkildən görünən struktur)
+            statusText = await page.$eval('#imeiStatus b', function (el) {
+                return el.innerText.trim();
+            });
+        } catch (e1) {
+            try {
+                // b tapılmasa, div-in özündən oxu
+                statusText = await page.$eval('#imeiStatus', function (el) {
+                    return el.innerText.trim();
+                });
+            } catch (e2) {
+                statusText = 'ELEMENT_NOT_FOUND';
+            }
+        }
+
+        console.log('📄 [IMEI] Nəticə:', statusText);
+
+        var imeiFee = statusText.endsWith('deaktiv olunub.');
+
+        res.json({
+            imeiFee: imeiFee,
+            message: statusText
+        });
 
     } catch (err) {
         console.error('❌ [IMEI] XƏTA:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
-
 // Listen
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`
