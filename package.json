@@ -1,0 +1,28 @@
+{
+  "name": "e-social-bot-api",
+  "version": "1.0.0",
+  "description": "E-Social Bot API - Web scraping service for e-social.gov.az",
+  "main": "main_service.js",
+  "bin": "main_service.js",
+  "scripts": {
+    "start": "node main_service.js",
+    "dev": "nodemon main_service.js",
+    "build-exe": "pkg . --targets node18-win-x64 --output bot_service.exe"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "firebase-admin": "^11.11.1",
+    "firebase-functions": "^4.5.0",
+    "puppeteer": "^24.15.0",
+    "puppeteer-core": "^24.15.0"
+  },
+  "devDependencies": {
+    "axios": "^1.13.6",
+    "nodemon": "^3.0.2",
+    "pkg": "^5.8.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
