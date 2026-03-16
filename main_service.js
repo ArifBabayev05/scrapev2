@@ -14,16 +14,39 @@ const { exec } = require('child_process');
 const app = express();
 const PORT = 4000;
 
-// Helper to find local Chrome
+// Helper to find local Chrome (system + user-level installs)
 const getChromePath = () => {
+    const homedir = require('os').homedir();
     const paths = [
         'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        path.join(homedir, 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe')
     ];
     for (const p of paths) {
-        if (fs.existsSync(p)) return p;
+        if (fs.existsSync(p)) {
+            console.log('✅ Chrome tapıldı:', p);
+            return p;
+        }
     }
     return null;
+};
+
+// EXE-nin yanında deyil, C:\bot\ qovluğunu istifadə edirik (bütün userlərdə mövcuddur)
+const getBaseDir = () => {
+    return 'C:\\bot';
+};
+
+// Qovluğun mövcud olduğundan əmin ol
+const ensureDir = (dirPath) => {
+    try {
+        if (!fs.existsSync(dirPath)) {
+            fs.mkdirSync(dirPath, { recursive: true });
+        }
+        return true;
+    } catch (err) {
+        console.error('⚠️ Qovluq yaradıla bilmədi:', dirPath, err.message);
+        return false;
+    }
 };
 
 // Middleware
@@ -69,6 +92,58 @@ process.on("unhandledRejection", (err) => {
 // Node process bağlanmasın
 setInterval(() => { }, 1000);
 
+// ============================================
+// Profil qovluğunu təmizlə (korrupt faylları sil)
+// about:blank-da ilişib qalma problemini həll edir
+// ============================================
+const cleanProfileCorruptFiles = (profilePath) => {
+    const filesToClean = [
+        'Local State',
+        'DevToolsActivePort',
+        path.join('Default', 'Preferences'),
+        'SingletonLock',
+        'SingletonSocket',
+        'SingletonCookie'
+    ];
+
+    filesToClean.forEach(file => {
+        const fullPath = path.join(profilePath, file);
+        try {
+            if (fs.existsSync(fullPath)) {
+                fs.unlinkSync(fullPath);
+                console.log('🧹 Korrupt fayl silindi:', fullPath);
+            }
+        } catch (err) {
+            console.log('⚠️ Fayl silinmədi (problem deyil):', fullPath, err.message);
+        }
+    });
+};
+
+// ============================================
+// Köhnə profil qovluqlarını təmizlə (bir dəfə)
+// ============================================
+const cleanupOldProfiles = () => {
+    // Əvvəlki exe-nin yanındakı profilləri sil (əgər varsa)
+    const exeDir = process.pkg ? path.dirname(process.execPath) : process.cwd();
+    const oldPaths = [
+        path.join(exeDir, 'bot_profile'),
+        path.join(exeDir, 'imei_profile')
+    ];
+    oldPaths.forEach(oldPath => {
+        try {
+            if (oldPath !== path.join(getBaseDir(), 'bot_profile') &&
+                oldPath !== path.join(getBaseDir(), 'imei_profile')) {
+                if (fs.existsSync(oldPath)) {
+                    fs.rmSync(oldPath, { recursive: true, force: true });
+                    console.log('🧹 Köhnə profil silindi:', oldPath);
+                }
+            }
+        } catch (err) {
+            console.log('⚠️ Köhnə profil silinmədi (problem deyil):', oldPath);
+        }
+    });
+};
+cleanupOldProfiles();
 
 let isLaunching = false;
 let globalBrowser = null;
@@ -95,9 +170,32 @@ async function ensureBrowser() {
             throw new Error("Chrome brauzeri tapılmadı. Zəhmət olmasa Google Chrome quraşdırın.");
         }
 
-        // EXE daxilində yolun düzgün tapılması üçün
-        const baseDir = process.pkg ? path.dirname(process.execPath) : process.cwd();
-        const profilePath = 'C:\\bot\\bot_profile';
+        // C:\bot\ altında profil qovluğu
+        const baseDir = getBaseDir();
+        const profilePath = path.join(baseDir, 'bot_profile');
+        ensureDir(profilePath);
+
+        // Korrupt faylları təmizlə (about:blank probleminin həlli)
+        cleanProfileCorruptFiles(profilePath);
+
+        // Chrome-un artıq açıq olan instansını öldür (port/lock konflikti olmasın)
+        try {
+            await new Promise((resolve) => {
+                exec('taskkill /f /im chrome.exe /t', (err) => {
+                    if (err) console.log('ℹ️ Chrome prosesi tapılmadı (normaldır)');
+                    resolve();
+                });
+            });
+            // Chrome-un tam bağlanmasını gözlə
+            await new Promise(r => setTimeout(r, 2000));
+        } catch (e) { }
+
+        // Singleton fayllarını yenidən təmizlə (Chrome bağlandıqdan sonra)
+        ['SingletonLock', 'SingletonSocket', 'SingletonCookie'].forEach(f => {
+            try { fs.unlinkSync(path.join(profilePath, f)); } catch (e) { }
+        });
+
+        const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
 
         globalBrowser = await puppeteer.launch({
             headless: false,
@@ -109,16 +207,46 @@ async function ensureBrowser() {
             handleSIGHUP: false,
             ignoreDefaultArgs: ['--enable-automation'],
             args: [
+                '--test-type',
                 '--start-maximized',
                 '--no-sandbox',
-                '--disable-setuid-sandbox',
+                '--disable-setuid-sandbox',   // açıq şəkildə əlavə — xəbərdarlıq mesajını aradan qaldırır
                 '--no-first-run',
                 '--no-default-browser-check',
                 '--disable-extensions',
-                '--disable-blink-features=AutomationControlled'
+                '--disable-blink-features=AutomationControlled',
+                '--disable-gpu',
+                '--disable-dev-shm-usage',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-infobars',          // info bar-ları gizlət
+                '--disable-features=TranslateUI', // tərcümə popup-ını söndür
+                targetUrl                       // birbaşa hədəf URL-i aç
             ],
             userDataDir: profilePath
         });
+
+        // Brauzerin URL-i yükləməsini gözlə
+        console.log("⏳ [E-Social] Səhifənin yüklənməsi gözlənilir...");
+        const pages = await globalBrowser.pages();
+        const page = pages[0];
+
+        if (page) {
+            try {
+                // Əgər hələ about:blank-dadırsa, naviqasiya et
+                await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
+
+                if (page.url() === 'about:blank' || page.url() === '') {
+                    console.log("⚠️ [E-Social] about:blank-da qaldı, manual naviqasiya edilir...");
+                    await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+                }
+
+                console.log("✅ [E-Social] Səhifə yükləndi:", page.url());
+            } catch (navErr) {
+                console.log("⚠️ [E-Social] İlk naviqasiya xətası (sonra yenidən cəhd ediləcək):", navErr.message);
+            }
+        }
 
         console.log("✅ [E-Social] Brauzer hazır və qoşuldu.");
         return globalBrowser;
@@ -153,8 +281,12 @@ app.post('/api/scrape', async (req, res) => {
         let page = pages.find(p => p.url().includes('e-social.gov.az')) || pages[0];
 
         const url = "https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1";
-        if (!page.url().includes('AppEmploymentContractOnline')) {
-            await page.goto(url, { waitUntil: 'networkidle2' });
+
+        // about:blank yoxlaması — əgər hələ boş səhifədədirsə, naviqasiya et
+        const currentUrl = page.url();
+        if (currentUrl === 'about:blank' || currentUrl === '' || !currentUrl.includes('AppEmploymentContractOnline')) {
+            console.log("🔄 [E-Social] Səhifəyə yönləndirilir...");
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
         }
 
         if (page.url().includes('mygovid.gov.az') || page.url().includes('auth')) {
@@ -188,7 +320,6 @@ app.post('/api/scrape', async (req, res) => {
 
                     modalSelectors.forEach(selector => {
                         document.querySelectorAll(selector).forEach(el => {
-                            // Əgər modalın içində "Bağla" yazısı varsa, onu silirik
                             if (el.innerText && el.innerText.includes('Bağla')) {
                                 el.remove();
                             }
@@ -214,7 +345,6 @@ app.post('/api/scrape', async (req, res) => {
             if (row) {
                 console.log("Sətir tapıldı, seçilir...");
                 row.scrollIntoView();
-                // Birdən çox hadisə göndəririk ki, saytın klik listeneri tutsun
                 ['mousedown', 'click', 'mouseup'].forEach(eventType => {
                     row.dispatchEvent(new MouseEvent(eventType, {
                         bubbles: true,
@@ -261,13 +391,11 @@ app.post('/api/scrape', async (req, res) => {
 
             // Axtarış düyməsini tapmaq və klikləmək
             const btn = (() => {
-                // 1. Placeholder-in yanındakı düymə
                 if (svInput) {
                     const parent = svInput.closest('.input-group') || svInput.parentElement;
                     const b = parent.querySelector('button, .q-btn, i.q-icon, .btn');
                     if (b) return b;
                 }
-                // 2. Rəng və ikonaya görə
                 return Array.from(document.querySelectorAll('button, .q-btn, .btn')).find(b => {
                     const s = window.getComputedStyle(b);
                     const isBlue = s.backgroundColor.includes('rgb(0, 51, 153)') ||
@@ -295,7 +423,6 @@ app.post('/api/scrape', async (req, res) => {
             const data = {};
             const cleanText = (t) => t.trim().toLowerCase().replace(/:$/, "").trim();
 
-            // Səhifədəki bütün form qruplarını və ya div-ləri gəzirik
             const containers = document.querySelectorAll('.form-group, .q-field, div.row > div');
 
             containers.forEach(container => {
@@ -305,26 +432,21 @@ app.post('/api/scrape', async (req, res) => {
                 const label = cleanText(labelEl.innerText);
                 if (!label || label.length > 50) return;
 
-                // Dəyəri tapmaq üçün müxtəlif yollar:
                 let value = "";
 
-                // 1. Standart Inputlar
                 const input = container.querySelector('input, select, textarea');
                 if (input) value = input.value || "";
 
-                // 2. v-select (Cinsi üçün)
                 if (!value || value.trim() === "") {
                     const vsSelected = container.querySelector('.vs__selected, .vs__selected-options');
                     if (vsSelected) value = vsSelected.innerText;
                 }
 
-                // 3. mx-datepicker (Doğum tarixi üçün)
                 if (!value || value.trim() === "") {
                     const dateInput = container.querySelector('.mx-input');
                     if (dateInput) value = dateInput.value;
                 }
 
-                // 4. Q-field və ya sadə div daxilindəki mətn
                 if (!value || value.trim() === "") {
                     const native = container.querySelector('.q-field__native, .q-field__control-container');
                     if (native) value = native.innerText;
@@ -335,12 +457,10 @@ app.post('/api/scrape', async (req, res) => {
                 }
             });
 
-            // Əgər hansısa labellər qaçıbsa, bütün inputları bir daha yoxla
             document.querySelectorAll('input').forEach(input => {
                 const val = input.value;
                 if (!val) return;
 
-                // Placeholder və ya yaxınlıqdakı label-ə bax
                 let label = "";
                 if (input.placeholder) label = cleanText(input.placeholder);
                 if (!label && input.id) {
@@ -390,23 +510,65 @@ async function ensureImeiBrowser() {
     try {
         console.log("🚀 [IMEI] Brauzer başladılır (Persistent)...");
         const chromePath = getChromePath();
-        const baseDir = process.pkg ? path.dirname(process.execPath) : process.cwd();
-        const profilePath = 'C:\\bot\\imei_profile';
+
+        if (!chromePath) {
+            throw new Error("Chrome brauzeri tapılmadı. Zəhmət olmasa Google Chrome quraşdırın.");
+        }
+
+        // C:\bot\ altında profil qovluğu
+        const baseDir = getBaseDir();
+        const profilePath = path.join(baseDir, 'imei_profile');
+        ensureDir(profilePath);
+
+        // Korrupt faylları təmizlə
+        cleanProfileCorruptFiles(profilePath);
+
+        // Singleton fayllarını təmizlə
+        ['SingletonLock', 'SingletonSocket', 'SingletonCookie'].forEach(f => {
+            try { fs.unlinkSync(path.join(profilePath, f)); } catch (e) { }
+        });
 
         imeiBrowser = await puppeteer.launch({
             headless: false,
             executablePath: chromePath,
+            defaultViewport: null,
             ignoreDefaultArgs: ['--enable-automation'],
             args: [
+                '--test-type',
                 '--start-maximized',
                 '--no-sandbox',
-                '--disable-setuid-sandbox',
+                '--disable-setuid-sandbox',   // açıq şəkildə əlavə
+                '--no-first-run',
+                '--no-default-browser-check',
                 '--disable-extensions',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-gpu',
+                '--disable-dev-shm-usage',
+                '--disable-infobars',
+                '--disable-features=TranslateUI',
                 '--password-store=basic',
-                '--use-mock-keychain'
+                '--use-mock-keychain',
+                'https://ins.mcqs.az/User/LogIn'   // birbaşa hədəf URL
             ],
             userDataDir: profilePath
         });
+
+        // Səhifənin yüklənməsini gözlə
+        const pages = await imeiBrowser.pages();
+        const page = pages[0];
+        if (page) {
+            try {
+                await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => { });
+                if (page.url() === 'about:blank' || page.url() === '') {
+                    console.log("⚠️ [IMEI] about:blank-da qaldı, manual naviqasiya edilir...");
+                    await page.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'networkidle2', timeout: 60000 });
+                }
+                console.log("✅ [IMEI] Səhifə yükləndi:", page.url());
+            } catch (navErr) {
+                console.log("⚠️ [IMEI] İlk naviqasiya xətası:", navErr.message);
+            }
+        }
+
         return imeiBrowser;
     } catch (err) {
         console.error("❌ [IMEI] Brauzer başlatma xətası:", err.message);
@@ -440,7 +602,7 @@ app.post('/api/check-imei', async (req, res) => {
 
         // ============ 1. LOGIN ============
         const currentUrl = page.url();
-        if (!currentUrl.includes('ins.mcqs.az') || currentUrl.includes('LogIn')) {
+        if (!currentUrl.includes('ins.mcqs.az') || currentUrl.includes('LogIn') || currentUrl === 'about:blank') {
             console.log('🌐 [IMEI] Login səhifəsinə giriş...');
             await page.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'networkidle2' });
 
@@ -473,21 +635,14 @@ app.post('/api/check-imei', async (req, res) => {
         // ============ 3. "IMEI Status yoxlanışı" TAB-ına KLİK ET ============
         console.log('🔘 [IMEI] "IMEI Status yoxlanışı" tabına klik edilir...');
 
-        // data-url atributuna görə tap (şəkil 1-dən)
-        await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 15000 });
+        await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 10000 });
         await page.click('li[data-url*="CheckImeiStatus"] a');
 
         // Tab yüklənməsini gözlə
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 1000));
 
         // ============ 4 + 5: IMEI YAZ VƏ KLİK ET ============
         console.log('✍️ [IMEI] IMEI kodu daxil edilir...');
-
-        // Əvvəlcə IMEI-ni URL-ə yazırıq ki evaluate daxilindən oxuya bilək
-        await page.evaluateOnNewDocument('window.__IMEI__ = "' + imei + '"');
-
-        // Yox, daha sadə — addExposeFunction və ya keyboard ilə yazaq
-        // Birbaşa keyboard istifadə edək, heç evaluate lazım deyil:
 
         await page.click('#getimeicode', { clickCount: 3 }); // mövcud mətni seç
         await page.keyboard.type(imei); // klaviatura ilə yaz
@@ -498,25 +653,25 @@ app.post('/api/check-imei', async (req, res) => {
         // ============ 6: NƏTİCƏNİ GÖZLƏ ============
         console.log('⏳ [IMEI] Nəticə gözlənilir...');
 
-        await new Promise(function (r) { setTimeout(r, 1500); });
-
         var statusText = '';
 
-        try {
-            // Əvvəlcə b tag-ından oxu (şəkildən görünən struktur)
-            statusText = await page.$eval('#imeiStatus b', function (el) {
-                return el.innerText.trim();
-            });
-        } catch (e1) {
+        // Hər 1 saniyə yoxla, max 20 saniyə
+        for (var attempt = 0; attempt < 20; attempt++) {
+            await new Promise(function (r) { setTimeout(r, 1000); });
+
             try {
-                // b tapılmasa, div-in özündən oxu
-                statusText = await page.$eval('#imeiStatus', function (el) {
+                statusText = await page.$eval('#imeiStatus b', function (el) {
                     return el.innerText.trim();
                 });
-            } catch (e2) {
-                statusText = 'ELEMENT_NOT_FOUND';
+                if (statusText && statusText.length > 5) {
+                    break;
+                }
+            } catch (e) {
+                statusText = '';
             }
         }
+
+        if (!statusText) statusText = 'RESULT_NOT_FOUND';
 
         console.log('📄 [IMEI] Nəticə:', statusText);
 
@@ -532,6 +687,7 @@ app.post('/api/check-imei', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
 // Listen
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`
