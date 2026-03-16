@@ -16,7 +16,6 @@ const { WebSocket } = require('ws');
 const puppeteer     = require('puppeteer');
 const fs            = require('fs');
 const path          = require('path');
-const { exec }      = require('child_process');
 
 // ── Config ───────────────────────────────────────────────────
 const RELAY_URL    = (process.env.RELAY_URL    || 'ws://localhost:3000').replace(/\/$/, '');
@@ -68,10 +67,6 @@ let isLaunching    = false;
 let imeiBrowser    = null;
 let isImeiLaunching = false;
 
-async function killChrome() {
-    await new Promise(r => exec('taskkill /f /im chrome.exe /t', () => r()));
-    await new Promise(r => setTimeout(r, 2000));
-}
 
 // ── E-Social Browser ─────────────────────────────────────────
 async function ensureBrowser() {
@@ -95,8 +90,8 @@ async function ensureBrowser() {
 
         const profilePath = path.join(getBaseDir(), 'bot_profile');
         ensureDir(profilePath);
+        // Yalnız singleton lock fayllarını sil (mövcud Chrome sesiyalarına toxunma)
         cleanProfileCorruptFiles(profilePath);
-        await killChrome();
 
         const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
 
