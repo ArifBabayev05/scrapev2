@@ -61,82 +61,111 @@ const cleanProfileCorruptFiles = (profilePath) => {
     });
 };
 
-// ── Browser instances ────────────────────────────────────────
-let globalBrowser  = null;
-let isLaunching    = false;
-let imeiBrowser    = null;
-let isImeiLaunching = false;
+// ── Browser + Page instances (persistent — tab 1 dəfə açılır) ─
+let globalBrowser    = null;
+let globalEsocialPage = null;   // E-Social üçün sabit tab
+let isLaunching      = false;
+let imeiBrowser      = null;
+let globalImeiPage   = null;    // IMEI üçün sabit tab
+let isImeiLaunching  = false;
 
 
 // ── E-Social Browser ─────────────────────────────────────────
-async function ensureBrowser() {
+// Brauzer + persistent tab qaytarır.
+// Tab yalnız 1 dəfə açılır; sonrakı çağırışlar mövcud tab-ı istifadə edir.
+async function ensureEsocialPage() {
+    // Mövcud page-i yoxla
+    if (globalEsocialPage) {
+        try {
+            await globalEsocialPage.evaluate(() => document.title); // crash test
+            return globalEsocialPage;
+        } catch {
+            console.log('⚠️ [E-Social] Köhnə tab bağlanıb, yenisi açılır...');
+            globalEsocialPage = null;
+            globalBrowser     = null;
+        }
+    }
+
+    // Browser yoxlanışı
     if (globalBrowser) {
-        try { await globalBrowser.version(); return globalBrowser; }
+        try { await globalBrowser.version(); }
         catch { globalBrowser = null; }
     }
+
     if (isLaunching) {
-        // Poll until ready
         for (let i = 0; i < 30; i++) {
             await new Promise(r => setTimeout(r, 2000));
-            if (globalBrowser) return globalBrowser;
+            if (globalEsocialPage) return globalEsocialPage;
         }
         return null;
     }
 
     isLaunching = true;
     try {
-        const chromePath = getChromePath();
-        if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
-
-        const profilePath = path.join(getBaseDir(), 'bot_profile');
-        ensureDir(profilePath);
-        // Yalnız singleton lock fayllarını sil (mövcud Chrome sesiyalarına toxunma)
-        cleanProfileCorruptFiles(profilePath);
-
         const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
 
-        globalBrowser = await puppeteer.launch({
-            headless: false,
-            executablePath: chromePath,
-            defaultViewport: null,
-            pipe: false,
-            handleSIGINT: false,
-            handleSIGTERM: false,
-            handleSIGHUP: false,
-            ignoreDefaultArgs: ['--enable-automation'],
-            args: [
-                '--test-type',
-                '--start-maximized',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--no-first-run',
-                '--no-default-browser-check',
-                '--disable-extensions',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-gpu',
-                '--disable-dev-shm-usage',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding',
-                '--disable-infobars',
-                '--disable-features=TranslateUI',
-                targetUrl
-            ],
-            userDataDir: profilePath
-        });
+        if (!globalBrowser) {
+            const chromePath = getChromePath();
+            if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
 
+            const profilePath = path.join(getBaseDir(), 'bot_profile');
+            ensureDir(profilePath);
+            // Yalnız singleton lock fayllarını sil (mövcud Chrome sesiyalarına toxunma)
+            cleanProfileCorruptFiles(profilePath);
+
+            globalBrowser = await puppeteer.launch({
+                headless: false,
+                executablePath: chromePath,
+                defaultViewport: null,
+                pipe: false,
+                handleSIGINT: false,
+                handleSIGTERM: false,
+                handleSIGHUP: false,
+                ignoreDefaultArgs: ['--enable-automation'],
+                args: [
+                    '--test-type',
+                    '--start-maximized',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--no-first-run',
+                    '--no-default-browser-check',
+                    '--disable-extensions',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding',
+                    '--disable-infobars',
+                    '--disable-features=TranslateUI',
+                    targetUrl
+                ],
+                userDataDir: profilePath
+            });
+        }
+
+        // İlk tab-ı götür (brauzer targetUrl ilə açılır)
         const pages = await globalBrowser.pages();
-        const page  = pages[0];
-        if (page) {
-            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-            if (page.url() === 'about:blank' || page.url() === '') {
-                await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        globalEsocialPage = pages[0];
+
+        if (globalEsocialPage) {
+            await globalEsocialPage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+            if (globalEsocialPage.url() === 'about:blank' || globalEsocialPage.url() === '') {
+                await globalEsocialPage.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
             }
         }
-        console.log('✅ [E-Social] Brauzer hazırdır:', (page?.url() || 'N/A'));
-        return globalBrowser;
+
+        // Tab bağlananda referansı sıfırla
+        globalEsocialPage.on('close', () => {
+            console.log('⚠️ [E-Social] Tab bağlandı — növbəti sorğuda yenidən açılacaq');
+            globalEsocialPage = null;
+        });
+
+        console.log('✅ [E-Social] Tab hazırdır:', globalEsocialPage.url());
+        return globalEsocialPage;
     } catch (err) {
-        console.error('❌ [E-Social] Brauzer başlatma xətası:', err.message);
+        console.error('❌ [E-Social] Tab açma xətası:', err.message);
+        globalEsocialPage = null;
         globalBrowser = null;
         return null;
     } finally {
@@ -145,66 +174,94 @@ async function ensureBrowser() {
 }
 
 // ── IMEI Browser ─────────────────────────────────────────────
-async function ensureImeiBrowser() {
+// Brauzer + persistent tab qaytarır.
+// Tab yalnız 1 dəfə açılır; sonrakı çağırışlar mövcud tab-ı istifadə edir.
+async function ensureImeiPage() {
+    // Mövcud page-i yoxla
+    if (globalImeiPage) {
+        try {
+            await globalImeiPage.evaluate(() => document.title); // crash test
+            return globalImeiPage;
+        } catch {
+            console.log('⚠️ [IMEI] Köhnə tab bağlanıb, yenisi açılır...');
+            globalImeiPage = null;
+            imeiBrowser    = null;
+        }
+    }
+
+    // Browser yoxlanışı
     if (imeiBrowser) {
-        try { await imeiBrowser.version(); return imeiBrowser; }
+        try { await imeiBrowser.version(); }
         catch { imeiBrowser = null; }
     }
+
     if (isImeiLaunching) {
         for (let i = 0; i < 30; i++) {
             await new Promise(r => setTimeout(r, 2000));
-            if (imeiBrowser) return imeiBrowser;
+            if (globalImeiPage) return globalImeiPage;
         }
         return null;
     }
 
     isImeiLaunching = true;
     try {
-        const chromePath = getChromePath();
-        if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
+        if (!imeiBrowser) {
+            const chromePath = getChromePath();
+            if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
 
-        const profilePath = path.join(getBaseDir(), 'imei_profile');
-        ensureDir(profilePath);
-        cleanProfileCorruptFiles(profilePath);
+            const profilePath = path.join(getBaseDir(), 'imei_profile');
+            ensureDir(profilePath);
+            cleanProfileCorruptFiles(profilePath);
 
-        imeiBrowser = await puppeteer.launch({
-            headless: false,
-            executablePath: chromePath,
-            defaultViewport: null,
-            ignoreDefaultArgs: ['--enable-automation'],
-            args: [
-                '--test-type',
-                '--start-maximized',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--no-first-run',
-                '--no-default-browser-check',
-                '--disable-extensions',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-gpu',
-                '--disable-dev-shm-usage',
-                '--disable-infobars',
-                '--disable-features=TranslateUI',
-                '--password-store=basic',
-                '--use-mock-keychain',
-                'https://ins.mcqs.az/User/LogIn'
-            ],
-            userDataDir: profilePath
-        });
+            imeiBrowser = await puppeteer.launch({
+                headless: false,
+                executablePath: chromePath,
+                defaultViewport: null,
+                ignoreDefaultArgs: ['--enable-automation'],
+                args: [
+                    '--test-type',
+                    '--start-maximized',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--no-first-run',
+                    '--no-default-browser-check',
+                    '--disable-extensions',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                    '--disable-infobars',
+                    '--disable-features=TranslateUI',
+                    '--password-store=basic',
+                    '--use-mock-keychain',
+                    'https://ins.mcqs.az/User/LogIn'
+                ],
+                userDataDir: profilePath
+            });
+        }
 
+        // İlk tab-ı götür (brauzer Login URL ilə açılır)
         const pages = await imeiBrowser.pages();
-        const page  = pages[0];
-        if (page) {
-            await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-            if (page.url() === 'about:blank' || page.url() === '') {
-                await page.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'networkidle2', timeout: 60000 });
+        globalImeiPage = pages[0];
+
+        if (globalImeiPage) {
+            await globalImeiPage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+            if (globalImeiPage.url() === 'about:blank' || globalImeiPage.url() === '') {
+                await globalImeiPage.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'networkidle2', timeout: 60000 });
             }
         }
-        console.log('✅ [IMEI] Brauzer hazırdır:', (page?.url() || 'N/A'));
-        return imeiBrowser;
+
+        // Tab bağlananda referansı sıfırla
+        globalImeiPage.on('close', () => {
+            console.log('⚠️ [IMEI] Tab bağlandı — növbəti sorğuda yenidən açılacaq');
+            globalImeiPage = null;
+        });
+
+        console.log('✅ [IMEI] Tab hazırdır:', globalImeiPage.url());
+        return globalImeiPage;
     } catch (err) {
-        console.error('❌ [IMEI] Brauzer başlatma xətası:', err.message);
-        imeiBrowser = null;
+        console.error('❌ [IMEI] Tab açma xətası:', err.message);
+        globalImeiPage = null;
+        imeiBrowser    = null;
         return null;
     } finally {
         isImeiLaunching = false;
@@ -219,15 +276,14 @@ async function runScrapeJob(body) {
     let formattedSv = sv.trim();
     if (formattedSv.toUpperCase().startsWith('AZE')) formattedSv = formattedSv.slice(3);
 
-    const browser = await ensureBrowser();
-    if (!browser) throw new Error('Brauzer başladıla bilmədi');
-
-    const pages = await browser.pages();
-    let page = pages.find(p => p.url().includes('e-social.gov.az')) || pages[0];
+    // Persistent tab — yalnız 1 dəfə açılır
+    const page = await ensureEsocialPage();
+    if (!page) throw new Error('E-Social tab açıla bilmədi');
 
     const url = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
     const cur = page.url();
     if (cur === 'about:blank' || cur === '' || !cur.includes('AppEmploymentContractOnline')) {
+        console.log('🔄 [E-Social] Səhifəyə yönləndirilir...');
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
     }
 
@@ -361,12 +417,9 @@ async function runImeiJob(body) {
     const { imei } = body;
     if (!imei) throw new Error('IMEI daxil edilməyib');
 
-    const b = await ensureImeiBrowser();
-    if (!b) throw new Error('IMEI brauzeri açmaq mümkün olmadı');
-
-    const pages = await b.pages();
-    let page = pages.find(p => p.url().includes('ins.mcqs.az')) || null;
-    if (!page) page = await b.newPage();
+    // Persistent tab — yalnız 1 dəfə açılır
+    const page = await ensureImeiPage();
+    if (!page) throw new Error('IMEI tab açıla bilmədi');
     await page.setDefaultNavigationTimeout(90000);
 
     const cur = page.url();
