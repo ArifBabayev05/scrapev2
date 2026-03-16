@@ -5,6 +5,7 @@
   "main": "relay-server.js",
   "scripts": {
     "start": "node relay-server.js",
+    "build": "echo Build complete",
     "agent": "node agent.js",
     "dev": "nodemon relay-server.js",
     "dev:agent": "nodemon agent.js"
