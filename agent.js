@@ -51,15 +51,20 @@ const ensureDir = (dir) => {
 
 // ── Profile cleaner ──────────────────────────────────────────
 const cleanProfileCorruptFiles = (profilePath) => {
+    // YALNIZ lock/port faylları sil.
+    // "Local State" və "Preferences" silinməməlidir —
+    // onlar sessiyaları, login məlumatlarını saxlayır.
     const files = [
-        'Local State', 'DevToolsActivePort',
-        path.join('Default', 'Preferences'),
-        'SingletonLock', 'SingletonSocket', 'SingletonCookie'
+        'SingletonLock',
+        'SingletonSocket',
+        'SingletonCookie',
+        'DevToolsActivePort',
     ];
     files.forEach(f => {
         try { fs.unlinkSync(path.join(profilePath, f)); } catch {}
     });
 };
+
 
 // ── Browser + Page instances (persistent — tab 1 dəfə açılır) ─
 let globalBrowser    = null;
