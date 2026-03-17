@@ -91,19 +91,14 @@ checkSingleInstance();
 const ensureDir = (dir) => {
     try {
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        // Yazma icazəsini yoxla
         fs.accessSync(dir, fs.constants.W_OK);
-        console.log('📁 Profil qovluğu hazırdır:', dir);
         return true;
     } catch (e) {
-        // Kritik xəta — istifadəçinin Chrome-nun pozulmaması üçün throw et
         throw new Error(`Profil qovluğu yaradıla bilmədi: ${dir} — ${e.message}`);
     }
 };
 
 // ── Profile cleaner (YALNIZ lock faylları) ───────────────────
-// LOCAL STATE VƏ PREFERENCES SİLİNMƏMƏLİDİR —
-// onlar sessiyaları, Asan İmza loginini, cookie-ləri saxlayır.
 const cleanSingletonFiles = (profilePath) => {
     ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'DevToolsActivePort']
         .forEach(f => {
@@ -111,183 +106,210 @@ const cleanSingletonFiles = (profilePath) => {
         });
 };
 
-// ── connectOrLaunchEdge ────────────────────────────────────
-// Sadə və etibarlı: puppeteer.launch() — HƏR Windows-da işləyir.
-// Əvvəlcə artıq açıq olan Edge-ə qoşulmağa cəhd edir (agent restart halı).
-// Tapılmasa puppeteer.launch() ilə yeni Edge açır — görünən, real pəncərə.
-async function connectOrLaunchEdge({ executablePath, userDataDir, debugPort, profilePath }) {
-    // Portu yoxla - əgər nəsə dinləyirsə qoşul
-    try {
-        const browser = await puppeteer.connect({
-            browserURL: `http://localhost:${debugPort}`,
-            defaultViewport: null,
-        });
-        console.log(`✅ Mövcud Edge-ə qoşuldu (port ${debugPort})`);
-        return browser;
-    } catch {}
+// ═══════════════════════════════════════════════════════════════
+// BRAUZER İDARƏETMƏSİ — Yalnız 1 Edge pəncərəsi, 2 tab
+// ═══════════════════════════════════════════════════════════════
 
-    // Əgər portda heç kim yoxdursa, amma yenə də msedge.exe varsa (zombi), onu təmizlə
-    if (process.platform === 'win32') {
-        try {
-            const { execSync } = require('child_process');
-            // Yalnız bizim profil qovluğunu istifadə edən Edge-ləri bağla
-            execSync(`taskkill /F /IM msedge.exe /FI "WINDOWTITLE eq *BotChrome*" /T`, { stdio: 'ignore' });
-        } catch {}
-    }
-
-    cleanSingletonFiles(profilePath);
-
-    console.log(`🚀 Yeni Edge pəncərəsi açılır (port ${debugPort})...`);
-    const browser = await puppeteer.launch({
-        executablePath,
-        headless: false,
-        defaultViewport: null,
-        userDataDir,
-        args: [
-            `--remote-debugging-port=${debugPort}`,
-            '--window-name=BotChrome', // taskkill üçün
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-infobars',
-            '--start-maximized',
-        ],
-        ignoreDefaultArgs: ['--enable-automation'],
-    });
-    return browser;
-}
-
-
-let globalBrowser    = null;
-let globalEsocialPage = null;   // E-Social üçün sabit tab
-let globalImeiPage    = null;   // IMEI üçün sabit tab
-let isLaunching       = false;
+let globalBrowser      = null;   // Tək brauzer instansiyası
+let globalEsocialPage  = null;   // E-Social üçün sabit tab
+let globalImeiPage     = null;   // IMEI üçün sabit tab
+let isLaunching        = false;
+let _esocialCloseRegistered = false;
+let _imeiCloseRegistered    = false;
 
 // ── ensureBrowser ────────────────────────────────────────────
+// HEÇ VAXT yeni Edge açmır əgər artıq birisi varsa.
 async function ensureBrowser() {
+    // Başqa bir çağırış artıq brauzer açırsa, gözlə
     if (isLaunching) {
-        for (let i = 0; i < 20; i++) {
-            await new Promise(r => setTimeout(r, 1000));
+        for (let i = 0; i < 30; i++) {
+            await new Promise(r => setTimeout(r, 500));
             if (globalBrowser) return globalBrowser;
         }
+        throw new Error('Brauzer açılması timeout oldu');
     }
 
+    // 1. Mövcud bağlantı işləyir?
     if (globalBrowser) {
         try {
             await globalBrowser.version();
             return globalBrowser;
         } catch {
+            console.log('⚠️ Brauzer bağlantısı kəsilib...');
             globalBrowser = null;
+            globalEsocialPage = null;
+            globalImeiPage = null;
+            _esocialCloseRegistered = false;
+            _imeiCloseRegistered = false;
         }
     }
 
     isLaunching = true;
     try {
+        // 2. Bəlkə Edge hələ açıqdır (agent restart halı) — qoşulmağa çalış
+        try {
+            console.log(`🔌 Port ${DEBUG_PORT}-ə qoşulur...`);
+            globalBrowser = await puppeteer.connect({
+                browserURL: `http://localhost:${DEBUG_PORT}`,
+                defaultViewport: null,
+            });
+            console.log('✅ Mövcud Edge-ə qoşuldu');
+            _setupDisconnectHandler();
+            return globalBrowser;
+        } catch {
+            console.log('ℹ️ Port boşdur, yeni Edge açılır...');
+        }
+
+        // 3. Yeni Edge — YALNIZ heç bir mövcud Edge yoxdursa
         const executablePath = getChromePath();
+        if (!executablePath) throw new Error('Edge/Chrome tapılmadı');
         const userDataDir = path.join(getBaseDir(), 'bot_profile');
         ensureDir(userDataDir);
+        cleanSingletonFiles(userDataDir);
 
-        globalBrowser = await connectOrLaunchEdge({
+        globalBrowser = await puppeteer.launch({
             executablePath,
+            headless: false,
+            defaultViewport: null,
             userDataDir,
-            debugPort: DEBUG_PORT,
-            profilePath: userDataDir,
+            args: [
+                `--remote-debugging-port=${DEBUG_PORT}`,
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-infobars',
+                '--start-maximized',
+            ],
+            ignoreDefaultArgs: ['--enable-automation'],
         });
+
+        console.log('✅ Yeni Edge açıldı');
+        _setupDisconnectHandler();
         return globalBrowser;
     } finally {
         isLaunching = false;
     }
 }
 
-
-// ── E-Social Browser ─────────────────────────────────────────
-async function ensureEsocialPage() {
-    try {
-        if (globalEsocialPage) {
-            try { await globalEsocialPage.evaluate(() => document.title); return globalEsocialPage; }
-            catch { globalEsocialPage = null; }
-        }
-
-        const browser = await ensureBrowser();
-        const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
-
-        let pages = await browser.pages();
-        globalEsocialPage = pages.find(p => p.url().includes('e-social.gov.az'));
-
-        if (!globalEsocialPage) {
-            const blankPage = pages.find(p => p.url() === 'about:blank' || p.url() === '');
-            if (blankPage) globalEsocialPage = blankPage;
-            else globalEsocialPage = await browser.newPage();
-        }
-
-        // Artıq tabları təmizlə (yalnız E-Social və IMEI qalsın)
-        pages = await browser.pages();
-        for (const p of pages) {
-            const url = p.url();
-            const isTarget = url.includes('ins.mcqs.az') || url.includes('e-social.gov.az') || url.includes('mygovid.gov.az') || url.includes('auth');
-            if (p !== globalEsocialPage && p !== globalImeiPage && !isTarget) {
-                try { await p.close(); } catch {}
-            }
-        }
-
-        const curUrl = globalEsocialPage.url();
-        if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('e-social.gov.az')) {
-            console.log('🔄 [E-Social] Tab yönləndirilir:', targetUrl);
-            await globalEsocialPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        }
-
-        try { await globalEsocialPage.bringToFront(); } catch {}
-        globalEsocialPage.on('close', () => { globalEsocialPage = null; });
-        return globalEsocialPage;
-    } catch (err) {
-        console.error('❌ [E-Social] Tab açma xətası:', err.message);
-        return null;
-    }
+// Brauzer bağlantısı kəsiləndə düzgün təmizlə
+function _setupDisconnectHandler() {
+    if (!globalBrowser) return;
+    globalBrowser.on('disconnected', () => {
+        console.log('⚠️ Edge bağlantısı kəsildi (pəncərə bağlandı?)');
+        globalBrowser = null;
+        globalEsocialPage = null;
+        globalImeiPage = null;
+        _esocialCloseRegistered = false;
+        _imeiCloseRegistered = false;
+    });
 }
 
-// ── IMEI Browser ─────────────────────────────────────────────
-async function ensureImeiPage() {
+// Art botları təmizlə — yalnız E-Social və IMEI tablarını saxla
+async function _cleanExtraTabs(browser) {
     try {
-        if (globalImeiPage) {
-            try { await globalImeiPage.evaluate(() => document.title); return globalImeiPage; }
-            catch { globalImeiPage = null; }
-        }
-
-        const browser = await ensureBrowser();
-        const targetUrl = 'https://ins.mcqs.az/User/LogIn';
-
-        let pages = await browser.pages();
-        globalImeiPage = pages.find(p => p.url().includes('ins.mcqs.az'));
-
-        if (!globalImeiPage) {
-            const blankPage = pages.find(p => p.url() === 'about:blank' || p.url() === '');
-            if (blankPage) globalImeiPage = blankPage;
-            else globalImeiPage = await browser.newPage();
-        }
-
-        // Artıq tabları təmizlə
-        pages = await browser.pages();
+        const pages = await browser.pages();
         for (const p of pages) {
+            if (p === globalEsocialPage || p === globalImeiPage) continue;
             const url = p.url();
-            const isTarget = url.includes('ins.mcqs.az') || url.includes('e-social.gov.az') || url.includes('mygovid.gov.az') || url.includes('auth');
-            if (p !== globalImeiPage && p !== globalEsocialPage && !isTarget) {
-                try { await p.close(); } catch {}
-            }
+            if (url.includes('e-social.gov.az') || url.includes('ins.mcqs.az') ||
+                url.includes('mygovid.gov.az') || url.includes('auth')) continue;
+            try { await p.close(); } catch {}
         }
+    } catch {}
+}
 
-        const curUrl = globalImeiPage.url();
-        if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('ins.mcqs.az')) {
-            console.log('🔄 [IMEI] Tab yönləndirilir:', targetUrl);
-            await globalImeiPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+// ── ensureEsocialPage ────────────────────────────────────────
+async function ensureEsocialPage() {
+    // Mövcud tab işləyirsə, onu qaytar
+    if (globalEsocialPage) {
+        try {
+            await globalEsocialPage.evaluate(() => true);
+            return globalEsocialPage;
+        } catch {
+            globalEsocialPage = null;
+            _esocialCloseRegistered = false;
         }
-
-        try { await globalImeiPage.bringToFront(); } catch {}
-        globalImeiPage.on('close', () => { globalImeiPage = null; });
-        return globalImeiPage;
-    } catch (err) {
-        console.error('❌ [IMEI] Tab açma xətası:', err.message);
-        return null;
     }
+
+    const browser = await ensureBrowser();
+    const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
+
+    // Mövcud tablardan tap
+    const pages = await browser.pages();
+    globalEsocialPage = pages.find(p => p.url().includes('e-social.gov.az'));
+
+    if (!globalEsocialPage) {
+        // Boş tab varsa onu istifadə et, yoxsa yenisini aç
+        const blank = pages.find(p => p !== globalImeiPage && (p.url() === 'about:blank' || p.url() === ''));
+        globalEsocialPage = blank || await browser.newPage();
+    }
+
+    await _cleanExtraTabs(browser);
+
+    // Lazım olsa navigate et
+    const curUrl = globalEsocialPage.url();
+    if (!curUrl.includes('e-social.gov.az')) {
+        console.log('🔄 [E-Social] Tab yönləndirilir...');
+        await globalEsocialPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    }
+
+    // Close handler — yalnız 1 dəfə
+    if (!_esocialCloseRegistered) {
+        globalEsocialPage.on('close', () => {
+            globalEsocialPage = null;
+            _esocialCloseRegistered = false;
+        });
+        _esocialCloseRegistered = true;
+    }
+
+    try { await globalEsocialPage.bringToFront(); } catch {}
+    return globalEsocialPage;
+}
+
+// ── ensureImeiPage ───────────────────────────────────────────
+async function ensureImeiPage() {
+    // Mövcud tab işləyirsə, onu qaytar
+    if (globalImeiPage) {
+        try {
+            await globalImeiPage.evaluate(() => true);
+            return globalImeiPage;
+        } catch {
+            globalImeiPage = null;
+            _imeiCloseRegistered = false;
+        }
+    }
+
+    const browser = await ensureBrowser();
+
+    // Mövcud tablardan tap
+    const pages = await browser.pages();
+    globalImeiPage = pages.find(p => p.url().includes('ins.mcqs.az'));
+
+    if (!globalImeiPage) {
+        const blank = pages.find(p => p !== globalEsocialPage && (p.url() === 'about:blank' || p.url() === ''));
+        globalImeiPage = blank || await browser.newPage();
+    }
+
+    await _cleanExtraTabs(browser);
+
+    // Lazım olsa navigate et
+    const curUrl = globalImeiPage.url();
+    if (!curUrl.includes('ins.mcqs.az')) {
+        console.log('🔄 [IMEI] Tab yönləndirilir...');
+        await globalImeiPage.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    }
+
+    // Close handler — yalnız 1 dəfə
+    if (!_imeiCloseRegistered) {
+        globalImeiPage.on('close', () => {
+            globalImeiPage = null;
+            _imeiCloseRegistered = false;
+        });
+        _imeiCloseRegistered = true;
+    }
+
+    try { await globalImeiPage.bringToFront(); } catch {}
+    return globalImeiPage;
 }
 
 // ── Scrape Job ───────────────────────────────────────────────
