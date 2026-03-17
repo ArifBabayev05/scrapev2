@@ -37,32 +37,35 @@ const getChromePath = () => {
 };
 
 // ── Base dir ─────────────────────────────────────────────────
-const getBaseDir = () => 'C:\\bot';
+// AppData\Local — admin icazəsi lazım deyil, həmişə yazıla bilir.
+// C:\bot admin icazəsi tələb edə bilər; ensureDir fail edərsə
+// Chrome default profili (istifadəçinin açıq Chrome-u) istifadə edir!
+const getBaseDir = () => {
+    const home = require('os').homedir();
+    return path.join(home, 'AppData', 'Local', 'BotChromeProfiles');
+};
 
 const ensureDir = (dir) => {
     try {
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        // Yazma icazəsini yoxla
+        fs.accessSync(dir, fs.constants.W_OK);
+        console.log('📁 Profil qovluğu hazırdır:', dir);
         return true;
     } catch (e) {
-        console.error('⚠️ Qovluq yaradıla bilmədi:', dir, e.message);
-        return false;
+        // Kritik xəta — istifadəçinin Chrome-nun pozulmaması üçün throw et
+        throw new Error(`Profil qovluğu yaradıla bilmədi: ${dir} — ${e.message}`);
     }
 };
 
-// ── Profile cleaner ──────────────────────────────────────────
-const cleanProfileCorruptFiles = (profilePath) => {
-    // YALNIZ lock/port faylları sil.
-    // "Local State" və "Preferences" silinməməlidir —
-    // onlar sessiyaları, login məlumatlarını saxlayır.
-    const files = [
-        'SingletonLock',
-        'SingletonSocket',
-        'SingletonCookie',
-        'DevToolsActivePort',
-    ];
-    files.forEach(f => {
-        try { fs.unlinkSync(path.join(profilePath, f)); } catch {}
-    });
+// ── Profile cleaner (YALNIZ lock faylları) ───────────────────
+// LOCAL STATE VƏ PREFERENCES SİLİNMƏMƏLİDİR —
+// onlar sessiyaları, Asan İmza loginini, cookie-ləri saxlayır.
+const cleanSingletonFiles = (profilePath) => {
+    ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'DevToolsActivePort']
+        .forEach(f => {
+            try { fs.unlinkSync(path.join(profilePath, f)); } catch {}
+        });
 };
 
 
@@ -113,10 +116,9 @@ async function ensureEsocialPage() {
             const chromePath = getChromePath();
             if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
 
-            const profilePath = path.join(getBaseDir(), 'bot_profile');
-            ensureDir(profilePath);
-            // Yalnız singleton lock fayllarını sil (mövcud Chrome sesiyalarına toxunma)
-            cleanProfileCorruptFiles(profilePath);
+            const profilePath = path.join(getBaseDir(), 'esocial_profile');
+            ensureDir(profilePath);      // admin icazəsi lazım olmayır (AppData)
+            cleanSingletonFiles(profilePath); // YALNIZ lock faylları
 
             globalBrowser = await puppeteer.launch({
                 headless: false,
@@ -215,8 +217,8 @@ async function ensureImeiPage() {
             if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
 
             const profilePath = path.join(getBaseDir(), 'imei_profile');
-            ensureDir(profilePath);
-            cleanProfileCorruptFiles(profilePath);
+            ensureDir(profilePath);      // admin icazəsi lazım olmayır (AppData)
+            cleanSingletonFiles(profilePath); // YALNIZ lock faylları
 
             imeiBrowser = await puppeteer.launch({
                 headless: false,
