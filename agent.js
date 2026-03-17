@@ -120,11 +120,9 @@ async function connectOrLaunchEdge({ executablePath, userDataDir, startUrl, debu
         `--user-data-dir=${userDataDir}`,
         '--no-first-run',
         '--no-default-browser-check',
-        '--no-sandbox',
         '--disable-blink-features=AutomationControlled',
         '--disable-infobars',
         '--start-maximized',
-        startUrl,
     ];
 
     // Variant A: PowerShell Start-Process — Session-a bağlı, tam görünən pencərə
@@ -242,13 +240,18 @@ async function ensureEsocialPage() {
             });
         }
 
-        // İlk tab-ı götür (brauzer targetUrl ilə açılır)
+        // İlk tab-ı götür, artıq tabları bağla
         const pages = await globalBrowser.pages();
         globalEsocialPage = pages[0];
 
+        // Artıq tabları bağla (dublikatları önlə)
+        for (let i = 1; i < pages.length; i++) {
+            try { await pages[i].close(); } catch {}
+        }
+
         if (globalEsocialPage) {
-            await globalEsocialPage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-            if (globalEsocialPage.url() === 'about:blank' || globalEsocialPage.url() === '') {
+            const curUrl = globalEsocialPage.url();
+            if (!curUrl.includes('e-social.gov.az')) {
                 await globalEsocialPage.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
             }
         }
@@ -319,13 +322,18 @@ async function ensureImeiPage() {
             });
         }
 
-        // İlk tab-ı götür (brauzer Login URL ilə açılır)
+        // İlk tab-ı götür, artıq tabları bağla
         const pages = await imeiBrowser.pages();
         globalImeiPage = pages[0];
 
+        // Artıq tabları bağla (dublikatları önlə)
+        for (let i = 1; i < pages.length; i++) {
+            try { await pages[i].close(); } catch {}
+        }
+
         if (globalImeiPage) {
-            await globalImeiPage.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-            if (globalImeiPage.url() === 'about:blank' || globalImeiPage.url() === '') {
+            const curUrl = globalImeiPage.url();
+            if (!curUrl.includes('ins.mcqs.az')) {
                 await globalImeiPage.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'networkidle2', timeout: 60000 });
             }
         }
