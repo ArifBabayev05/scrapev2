@@ -14,7 +14,6 @@ process.on('unhandledRejection', (err) => console.error('UNHANDLED PROMISE:', er
 
 const { WebSocket }             = require('ws');
 let puppeteer; try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
-const { spawn, exec }           = require('child_process');
 const fs                        = require('fs');
 const path                      = require('path');
 const os                        = require('os');
@@ -95,10 +94,11 @@ const cleanSingletonFiles = (profilePath) => {
 };
 
 // ── connectOrLaunchEdge ────────────────────────────────────
-// Variant A — PowerShell Start-Process (GUI pencere garantiyası)
-// Fallback — cmd /c start (nəticə eynidər, bir az fərqli məntiq)
-async function connectOrLaunchEdge({ executablePath, userDataDir, startUrl, debugPort, profilePath }) {
-    // Adım 1: Mövcud Edge instansına qoşulmağa cəhd et
+// Sadə və etibarlı: puppeteer.launch() — HƏR Windows-da işləyir.
+// Əvvəlcə artıq açıq olan Edge-ə qoşulmağa cəhd edir (agent restart halı).
+// Tapılmasa puppeteer.launch() ilə yeni Edge açır — görünən, real pəncərə.
+async function connectOrLaunchEdge({ executablePath, userDataDir, debugPort, profilePath }) {
+    // Adım 1: Mövcud Edge instansına qoşulmağa cəhd et (agent restart halı)
     try {
         console.log(`🔌 Mövcud Edge-ə qoşulur (port ${debugPort})...`);
         const browser = await puppeteer.connect({
@@ -114,71 +114,25 @@ async function connectOrLaunchEdge({ executablePath, userDataDir, startUrl, debu
     // Adım 2: Stale lock faylları təmizlə
     cleanSingletonFiles(profilePath);
 
-    // Adım 3: Edge-i PowerShell Start-Process ilə aç (en etibaerlı Windows yolu)
-    const edgeArgs = [
-        `--remote-debugging-port=${debugPort}`,
-        `--user-data-dir=${userDataDir}`,
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-infobars',
-        '--start-maximized',
-    ];
-
-    // Variant A: PowerShell Start-Process — Session-a bağlı, tam görünən pencərə
-    await launchViaPowerShell(executablePath, edgeArgs, debugPort);
-
-    // Adım 4: Edge debug portunu açıb hazır olanadek gözlə (max 40s)
-    console.log('⏳ Edge-in debug portunu açması gözlənilir...');
-    for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-            const browser = await puppeteer.connect({
-                browserURL: `http://localhost:${debugPort}`,
-                defaultViewport: null,
-            });
-            console.log(`✅ Edge hazırdır və qoşuldu (port ${debugPort})`);
-            return browser;
-        } catch {
-            console.log(`⏳ Gözlənilir... (${i + 1}/20)`);
-        }
-    }
-    throw new Error(`Edge port ${debugPort} 40 saniyə ərzində hazır olmadı`);
-}
-
-// PowerShell Start-Process köməkçi
-// Windows-da GUI pencərəsi açmağın ən etibaerlı yolu budur.
-async function launchViaPowerShell(executablePath, args, debugPort) {
-    // Bat faylı temp qovluğunda yarat — arg quoting problemini həll edir
-    const batPath = path.join(os.tmpdir(), `bot_edge_${debugPort}.bat`);
-    const quotedArgs = args.map(a =>
-        (a.startsWith('http') || a.includes('&') || a.includes(' '))
-            ? `"${a}"`
-            : a
-    ).join(' ');
-
-    // .bat fərdi: start "" = yeni, müstəqil, görünən pencərə
-    const batContent = `@echo off\r\nstart "" "${executablePath}" ${quotedArgs}\r\n`;
-    fs.writeFileSync(batPath, batContent, 'latin1');
-
-    await new Promise((resolve, reject) => {
-        // PowerShell vasitəsilə .bat faylını işlət
-        exec(`powershell -NoProfile -Command "Start-Process cmd -ArgumentList '/c \"${batPath.replace(/"/g, '\\"')}\"' -WindowStyle Hidden"`,
-            (err) => {
-                if (err) {
-                    // PowerShell uğursuz olarsa cmd ilə birbaşa cəhd et
-                    console.log('⚠️ PowerShell cəhdi uğursuz, cmd ilə birbaşa cəhd...');
-                    exec(`cmd /c ""${batPath}""`, () => resolve());
-                } else {
-                    resolve();
-                }
-            }
-        );
+    // Adım 3: puppeteer.launch() — ən etibarlı yol
+    console.log(`🚀 Edge açılır (puppeteer.launch, port ${debugPort})...`);
+    const browser = await puppeteer.launch({
+        executablePath,
+        headless: false,      // Görünən pəncərə — user sertifikat seçə bilsin
+        defaultViewport: null, // Tam ekran
+        userDataDir,
+        args: [
+            `--remote-debugging-port=${debugPort}`,
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-infobars',
+            '--start-maximized',
+        ],
+        ignoreDefaultArgs: ['--enable-automation'],  // "Chrome is being controlled" mesajını gizlə
     });
-
-    // Bat faylını 10s sonra təmizlə
-    setTimeout(() => { try { fs.unlinkSync(batPath); } catch {} }, 10_000);
-    console.log(`🚀 Edge başladılma köməndə verildi (port ${debugPort})`);
+    console.log(`✅ Edge açıldı və hazırdır (port ${debugPort})`);
+    return browser;
 }
 
 
