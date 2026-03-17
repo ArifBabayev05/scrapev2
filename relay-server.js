@@ -51,49 +51,57 @@ const agents = new Map();
 const pendingJobs = new Map();
 
 // ── Helpers ─────────────────────────────────────────────────
-// Mövcud boş agent tap
-function getAvailableAgent() {
+// ATOM\u0130K agent tap+rezerv funksiyası.
+// tap() + busy=true eyni sinxron blokda olur —
+// paralel sorğular eyni agenti əldə edə bilməz (JS single-thread).
+function tryClaimAgent() {
     for (const [agentId, agent] of agents) {
         if (!agent.busy && agent.ws.readyState === WebSocket.OPEN) {
+            agent.busy = true; // ← atom: tap + rezerv eyni addımda
             return { agentId, agent };
         }
     }
     return null;
 }
 
-// Agent yoxdursa waitMs müddətinə qədər gözlə (500ms aralıqla yoxla)
-// Railway redeploy zamanı agent ~5s ərzində yenidən qoşulur —
-// bu funksiya o reconnect-i gözləyir.
-async function waitForAgent(waitMs = 15_000) {
-    const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) {
-        const found = getAvailableAgent();
-        if (found) return found;
-        await new Promise(r => setTimeout(r, 500));
+// Yalnız status üçün (busy=true etmir)
+function getAvailableAgentCount() {
+    let count = 0;
+    for (const [, agent] of agents) {
+        if (!agent.busy && agent.ws.readyState === WebSocket.OPEN) count++;
     }
-    return null;
+    return count;
 }
 
 async function sendJobToAgent(jobType, payload) {
-    // Əvvəlcə dərhal yoxla; tapılmasa agent qoşulana qədər gözlə
-    let available = getAvailableAgent();
-    if (!available) {
-        console.log('⏳ Agent tapılmadı, 15s gözlənilir...');
-        available = await waitForAgent(15_000);
+    // 1. Dərhal atomik əldə cəhdi
+    let claimed = tryClaimAgent();
+
+    // 2. Boş agent yoxdursa — 15s gözlə, hər 300ms-də atomik yoxla
+    if (!claimed) {
+        console.log(`⏳ [${jobType}] Boş agent yoxdur (${agents.size} agent, gözlənilir...)`);
+
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 300));
+            claimed = tryClaimAgent(); // hər dəfə atomik
+            if (claimed) break;
+        }
     }
 
-    if (!available) {
+    if (!claimed) {
+        const boş = getAvailableAgentCount();
         const err = new Error(
-            'NO_AGENT: Aktiv lokal agent tapılmadı. ' +
+            `NO_AGENT: Aktiv lokal agent tapılmadı (${agents.size} agent qoşuludur, ${boş} boşdur). ` +
             'Zəhmət olmasa kompüterdə "node agent.js" işlədilsin.'
         );
         err.code = 503;
         return Promise.reject(err);
     }
 
-    const { agentId, agent } = available;
+    const { agentId, agent } = claimed;
     const jobId = uuidv4();
-    agent.busy  = true;
+
 
     return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
