@@ -12,11 +12,12 @@ try { require('dotenv').config(); } catch {}
 process.on('uncaughtException',  (err) => console.error('CRITICAL ERROR:', err));
 process.on('unhandledRejection', (err) => console.error('UNHANDLED PROMISE:', err));
 
-const { WebSocket }          = require('ws');
-const puppeteer              = require('puppeteer');
-const { spawn }              = require('child_process');
-const fs                     = require('fs');
-const path                   = require('path');
+const { WebSocket }             = require('ws');
+const puppeteer                 = require('puppeteer');
+const { spawn, exec }           = require('child_process');
+const fs                        = require('fs');
+const path                      = require('path');
+const os                        = require('os');
 
 // ── Config ───────────────────────────────────────────────────
 const RELAY_URL           = (process.env.RELAY_URL    || 'ws://localhost:3000').replace(/\/$/, '');
@@ -94,9 +95,8 @@ const cleanSingletonFiles = (profilePath) => {
 };
 
 // ── connectOrLaunchEdge ────────────────────────────────────
-// Edge-i ASTANİLMIŞ proses kimi açır (detached: true) —
-// bu səbəbdən Edge taskbar-da görünür və Node.js prosesindən asılı deyil.
-// Əgər Edge artıq debug portunda işləyirsə, yenidən başlatmadan qoşulur.
+// Variant A — PowerShell Start-Process (GUI pencere garantiyası)
+// Fallback — cmd /c start (nəticə eynidər, bir az fərqli məntiq)
 async function connectOrLaunchEdge({ executablePath, userDataDir, startUrl, debugPort, profilePath }) {
     // Adım 1: Mövcud Edge instansına qoşulmağa cəhd et
     try {
@@ -114,9 +114,8 @@ async function connectOrLaunchEdge({ executablePath, userDataDir, startUrl, debu
     // Adım 2: Stale lock faylları təmizlə
     cleanSingletonFiles(profilePath);
 
-    // Adım 3: Edge-i müstəqil (detached) proses kimi aç
-    // detached: true + proc.unref() = taskbar-da görünən, müstəqil Edge pencərəsi
-    const args = [
+    // Adım 3: Edge-i PowerShell Start-Process ilə aç (en etibaerlı Windows yolu)
+    const edgeArgs = [
         `--remote-debugging-port=${debugPort}`,
         `--user-data-dir=${userDataDir}`,
         '--no-first-run',
@@ -128,17 +127,12 @@ async function connectOrLaunchEdge({ executablePath, userDataDir, startUrl, debu
         startUrl,
     ];
 
-    console.log(`🚀 Edge ayrı proses kimi açılır (port ${debugPort}, taskbar-da görünəcək)...`);
-    const proc = spawn(executablePath, args, {
-        detached    : true,   // Node.js proses ağacından tam ayrılır
-        stdio       : 'ignore',
-        windowsHide : false,  // Pencərə görünən olsun
-    });
-    proc.unref(); // Node.js-in çıxışı Edge-i bağlamasın
+    // Variant A: PowerShell Start-Process — Session-a bağlı, tam görünən pencərə
+    await launchViaPowerShell(executablePath, edgeArgs, debugPort);
 
-    // Adım 4: Edge debug portunu açıb hazır olanadək gözlə (max 30s)
+    // Adım 4: Edge debug portunu açıb hazır olanadek gözlə (max 40s)
     console.log('⏳ Edge-in debug portunu açması gözlənilir...');
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 20; i++) {
         await new Promise(r => setTimeout(r, 2000));
         try {
             const browser = await puppeteer.connect({
@@ -148,10 +142,45 @@ async function connectOrLaunchEdge({ executablePath, userDataDir, startUrl, debu
             console.log(`✅ Edge hazırdır və qoşuldu (port ${debugPort})`);
             return browser;
         } catch {
-            console.log(`⏳ Gözlənilir... (${i + 1}/15)`);
+            console.log(`⏳ Gözlənilir... (${i + 1}/20)`);
         }
     }
-    throw new Error(`Edge port ${debugPort}-də 30 saniyə ərzində hazır olmadı`);
+    throw new Error(`Edge port ${debugPort} 40 saniyə ərzində hazır olmadı`);
+}
+
+// PowerShell Start-Process köməkçi
+// Windows-da GUI pencərəsi açmağın ən etibaerlı yolu budur.
+async function launchViaPowerShell(executablePath, args, debugPort) {
+    // Bat faylı temp qovluğunda yarat — arg quoting problemini həll edir
+    const batPath = path.join(os.tmpdir(), `bot_edge_${debugPort}.bat`);
+    const quotedArgs = args.map(a =>
+        (a.startsWith('http') || a.includes('&') || a.includes(' '))
+            ? `"${a}"`
+            : a
+    ).join(' ');
+
+    // .bat fərdi: start "" = yeni, müstəqil, görünən pencərə
+    const batContent = `@echo off\r\nstart "" "${executablePath}" ${quotedArgs}\r\n`;
+    fs.writeFileSync(batPath, batContent, 'latin1');
+
+    await new Promise((resolve, reject) => {
+        // PowerShell vasitəsilə .bat faylını işlət
+        exec(`powershell -NoProfile -Command "Start-Process cmd -ArgumentList '/c \"${batPath.replace(/"/g, '\\"')}\"' -WindowStyle Hidden"`,
+            (err) => {
+                if (err) {
+                    // PowerShell uğursuz olarsa cmd ilə birbaşa cəhd et
+                    console.log('⚠️ PowerShell cəhdi uğursuz, cmd ilə birbaşa cəhd...');
+                    exec(`cmd /c ""${batPath}""`, () => resolve());
+                } else {
+                    resolve();
+                }
+            }
+        );
+    });
+
+    // Bat faylını 10s sonra təmizlə
+    setTimeout(() => { try { fs.unlinkSync(batPath); } catch {} }, 10_000);
+    console.log(`🚀 Edge başladılma köməndə verildi (port ${debugPort})`);
 }
 
 
