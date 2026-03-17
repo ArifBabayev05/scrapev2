@@ -13,7 +13,7 @@ process.on('uncaughtException',  (err) => console.error('CRITICAL ERROR:', err))
 process.on('unhandledRejection', (err) => console.error('UNHANDLED PROMISE:', err));
 
 const { WebSocket }             = require('ws');
-const puppeteer                 = require('puppeteer');
+let puppeteer; try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
 const { spawn, exec }           = require('child_process');
 const fs                        = require('fs');
 const path                      = require('path');

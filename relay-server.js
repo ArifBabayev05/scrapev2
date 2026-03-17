@@ -335,10 +335,12 @@ console.log('  [OK] launcher.js yaradildi');
 
 // 6. Windows Scheduled Task — hər login-də avtomatik başlasın
 try {
-    const nodePath = process.execPath;
     const launcherPath = path.join(DIR, 'launcher.js');
+    // .cmd wrapper yaradırıq — schtasks ilə quoting problemi olmur
+    const cmdPath = path.join(DIR, 'start-agent.cmd');
+    fs.writeFileSync(cmdPath, '@echo off\\r\\nnode "' + launcherPath + '"\\r\\n');
     execSync(
-        \`schtasks /create /tn "ESocialBot" /tr "\\"\${nodePath}\\" \\"\${launcherPath}\\"" /sc onlogon /f /rl limited\`,
+        'schtasks /create /tn "ESocialBot" /tr "\\"' + cmdPath + '\\"" /sc onlogon /f /rl limited',
         { stdio: 'pipe' }
     );
     console.log('  [OK] Scheduled Task yaradildi (her login-de avtomatik)');
