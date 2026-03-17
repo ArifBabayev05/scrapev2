@@ -140,7 +140,14 @@ async function ensureBrowser(service) {
         });
 
         if (isEsocial) globalEsocialBrowser = browser; else globalImeiBrowser = browser;
-        console.log(`🚀 [\${service}] Yeni brauzer acildi (Port: \${port})`);
+        console.log(`🚀 [${service}] Yeni brauzer acildi (Port: ${port})`);
+
+        browser.on('disconnected', () => {
+            console.log(`⚠️ [${service}] Brauzer pencesi baglandi`);
+            if (isEsocial) { globalEsocialBrowser = null; globalEsocialPage = null; }
+            else { globalImeiBrowser = null; globalImeiPage = null; }
+        });
+
         return browser;
     } finally {
         if (isEsocial) isLaunchingEsocial = false; else isLaunchingImei = false;
@@ -238,6 +245,25 @@ async function runScrapeJob(body) {
     return { success: true, data: resultData };
 }
 
+// ── Job Retry Wrapper ───────────────────────────────────────
+async function handleJobWithRetry(jobType, payload, attempt = 1) {
+    try {
+        if (jobType === 'scrape')      return await runScrapeJob(payload);
+        if (jobType === 'check-imei') return await runImeiJob(payload);
+        throw new Error(`Namalum is tipi: ${jobType}`);
+    } catch (err) {
+        const isClosed = err.message.includes('Target closed') || err.message.includes('Protocol error');
+        if (isClosed && attempt === 1) {
+            console.log(`🔄 [${jobType}] Target closed/Protocol error. Yeniden cehd edilir...`);
+            // Reset references to force a fresh launch
+            if (jobType === 'scrape') { globalEsocialBrowser = null; globalEsocialPage = null; }
+            else { globalImeiBrowser = null; globalImeiPage = null; }
+            return await handleJobWithRetry(jobType, payload, 2);
+        }
+        throw err;
+    }
+}
+
 // ── IMEI Job ─────────────────────────────────────────────────
 async function runImeiJob(body) {
     const { imei } = body;
@@ -314,13 +340,17 @@ function connect() {
     ws.on('message', async (raw) => {
         let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
         if (msg.type === 'job') {
-            console.log(`📥 Is alindi: \${msg.jobType} [\${msg.jobId}]`);
+            console.log(`📥 Is alindi: ${msg.jobType} [${msg.jobId}]`);
             try {
-                const result = await handleJob(msg.jobType, msg.payload);
-                ws.send(JSON.stringify({ type: 'job_result', jobId: msg.jobId, result }));
+                const result = await handleJobWithRetry(msg.jobType, msg.payload);
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'job_result', jobId: msg.jobId, result }));
+                }
             } catch (err) {
-                console.error(`❌ Is xetasi [\${msg.jobId}]:`, err.message);
-                ws.send(JSON.stringify({ type: 'job_result', jobId: msg.jobId, error: err.message }));
+                console.error(`❌ Is xetasi [${msg.jobId}]:`, err.message);
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'job_result', jobId: msg.jobId, error: err.message }));
+                }
             }
         }
     });
