@@ -194,23 +194,24 @@ async function ensureEsocialPage() {
             });
         }
 
-        // Mövcud tabları yoxla
-        const pages = await globalBrowser.pages();
+        // Mövcud tabları götür
+        let pages = await globalBrowser.pages();
         
         // 1. Target URL olan tab varmı?
         globalEsocialPage = pages.find(p => p.url().includes('e-social.gov.az'));
 
-        // 2. Yoxdursa, ilk tabı götür
+        // 2. Yoxdursa, ilk tabı hədəf seç
         if (!globalEsocialPage && pages.length > 0) {
             globalEsocialPage = pages[0];
         }
 
-        // 3. Heç tab yoxdursa (nadir hal), yeni aç
+        // 3. Heç tab yoxdursa, yeni aç
         if (!globalEsocialPage) {
             globalEsocialPage = await globalBrowser.newPage();
         }
 
-        // Artıq tabları bağla (yalnız 1 tab qalsın)
+        // ❗ KRİTİK: Digər bütün artıq tabları dərhal bağla
+        pages = await globalBrowser.pages();
         for (const p of pages) {
             if (p !== globalEsocialPage) {
                 try { await p.close(); } catch {}
@@ -219,9 +220,10 @@ async function ensureEsocialPage() {
 
         if (globalEsocialPage) {
             const curUrl = globalEsocialPage.url();
+            // Əgər tab hələ hədəf saytda deyilsə, yönləndir
             if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('e-social.gov.az')) {
                 console.log('🔄 [E-Social] Tab yönləndirilir:', targetUrl);
-                await globalEsocialPage.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+                await globalEsocialPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
             }
         }
 
@@ -291,13 +293,13 @@ async function ensureImeiPage() {
             });
         }
 
-        // Mövcud tabları yoxla
-        const pages = await imeiBrowser.pages();
+        // Mövcud tabları götür
+        let pages = await imeiBrowser.pages();
         
         // 1. Target URL olan tab varmı?
         globalImeiPage = pages.find(p => p.url().includes('ins.mcqs.az'));
 
-        // 2. Yoxdursa, ilk tabı götür
+        // 2. Yoxdursa, ilk tabı hədəf seç
         if (!globalImeiPage && pages.length > 0) {
             globalImeiPage = pages[0];
         }
@@ -307,7 +309,8 @@ async function ensureImeiPage() {
             globalImeiPage = await imeiBrowser.newPage();
         }
 
-        // Artıq tabları bağla (yalnız 1 tab qalsın)
+        // ❗ KRİTİK: Digər bütün artıq tabları dərhal bağla
+        pages = await imeiBrowser.pages();
         for (const p of pages) {
             if (p !== globalImeiPage) {
                 try { await p.close(); } catch {}
@@ -319,7 +322,7 @@ async function ensureImeiPage() {
             const targetUrl = 'https://ins.mcqs.az/User/LogIn';
             if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('ins.mcqs.az')) {
                 console.log('🔄 [IMEI] Tab yönləndirilir:', targetUrl);
-                await globalImeiPage.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+                await globalImeiPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
             }
         }
 
@@ -516,22 +519,36 @@ async function runImeiJob(body) {
     const isAlreadyOnCheck = await page.$('#getimeicode');
     if (!isAlreadyOnCheck) {
         console.log('🔄 [IMEI] Yoxlama bölməsinə keçilir...');
-        await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 10000 });
+        await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 15000 });
         await page.click('li[data-url*="CheckImeiStatus"] a');
-        await new Promise(r => setTimeout(r, 1000));
     }
 
-    await page.click('#getimeicode', { clickCount: 3 });
-    await page.keyboard.type(imei);
+    // Input-un hazır olmasını gözlə və dərhal yaz (typing-dən sürətlidir)
+    await page.waitForSelector('#getimeicode', { timeout: 10000 });
+    await page.evaluate((val) => {
+        const el = document.querySelector('#getimeicode');
+        if (el) {
+            el.value = val;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }, imei);
+
+    // Axtarış düyməsi
     await page.click('#checkimeistatus');
 
+    // Nəticənin gəlməsini monitor et (timeout-suz, dərhal)
+    console.log('⏳ [IMEI] Nəticə gözlənilir...');
     let statusText = '';
-    for (let i = 0; i < 20; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        try {
-            statusText = await page.$eval('#imeiStatus b', el => el.innerText.trim());
-            if (statusText && statusText.length > 5) break;
-        } catch {}
+    try {
+        await page.waitForFunction(() => {
+            const el = document.querySelector('#imeiStatus b');
+            return el && el.innerText.trim().length > 5;
+        }, { timeout: 15000 });
+        statusText = await page.$eval('#imeiStatus b', el => el.innerText.trim());
+    } catch (e) {
+        console.log('⚠️ [IMEI] Nəticə vaxtında gəlmədi, son cəhd...');
+        statusText = await page.$eval('#imeiStatus b', el => el.innerText.trim()).catch(() => '');
     }
 
     if (!statusText) statusText = 'RESULT_NOT_FOUND';
