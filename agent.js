@@ -23,18 +23,32 @@ const AGENT_SECRET = process.env.AGENT_SECRET  || 'bot-secret-2024';
 const AGENT_LABEL  = process.env.AGENT_LABEL   || require('os').hostname();
 
 // ── Chrome path ──────────────────────────────────────────────
+// Edge — Windows 10/11-də həmişə quraşdırılmış gəlir, yeri sabitdir.
+// Chrome — əlavə quraşdırılıbsa fallback kimi.
 const getChromePath = () => {
-    const home  = require('os').homedir();
-    const paths = [
+    const home = require('os').homedir();
+    const candidates = [
+        // ── Microsoft Edge (tövsiyə edilir — default Windows brauzeri) ──
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+        path.join(home, 'AppData', 'Local', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+
+        // ── Google Chrome (fallback) ──
         'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
         'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
         path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe'),
     ];
-    for (const p of paths) {
-        if (fs.existsSync(p)) { console.log('✅ Chrome tapıldı:', p); return p; }
+    for (const p of candidates) {
+        if (fs.existsSync(p)) {
+            const name = p.includes('msedge') ? 'Edge' : 'Chrome';
+            console.log(`✅ ${name} tapıldı: ${p}`);
+            return p;
+        }
     }
+    console.error('❌ Nə Edge, nə də Chrome tapıldı!');
     return null;
 };
+
 
 // ── Base dir ─────────────────────────────────────────────────
 // AppData\Local — admin icazəsi lazım deyil, həmişə yazıla bilir.
