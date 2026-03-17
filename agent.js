@@ -12,15 +12,18 @@ try { require('dotenv').config(); } catch {}
 process.on('uncaughtException',  (err) => console.error('CRITICAL ERROR:', err));
 process.on('unhandledRejection', (err) => console.error('UNHANDLED PROMISE:', err));
 
-const { WebSocket } = require('ws');
-const puppeteer     = require('puppeteer');
-const fs            = require('fs');
-const path          = require('path');
+const { WebSocket }          = require('ws');
+const puppeteer              = require('puppeteer');
+const { spawn }              = require('child_process');
+const fs                     = require('fs');
+const path                   = require('path');
 
 // ── Config ───────────────────────────────────────────────────
-const RELAY_URL    = (process.env.RELAY_URL    || 'ws://localhost:3000').replace(/\/$/, '');
-const AGENT_SECRET = process.env.AGENT_SECRET  || 'bot-secret-2024';
-const AGENT_LABEL  = process.env.AGENT_LABEL   || require('os').hostname();
+const RELAY_URL           = (process.env.RELAY_URL    || 'ws://localhost:3000').replace(/\/$/, '');
+const AGENT_SECRET        = process.env.AGENT_SECRET  || 'bot-secret-2024';
+const AGENT_LABEL         = process.env.AGENT_LABEL   || require('os').hostname();
+const ESOCIAL_DEBUG_PORT  = parseInt(process.env.ESOCIAL_DEBUG_PORT || '9222');
+const IMEI_DEBUG_PORT     = parseInt(process.env.IMEI_DEBUG_PORT    || '9223');
 
 // ── Chrome path ──────────────────────────────────────────────
 // Edge — Windows 10/11-də həmişə quraşdırılmış gəlir.
@@ -90,60 +93,65 @@ const cleanSingletonFiles = (profilePath) => {
         });
 };
 
-// ── Shared browser launch helper ────────────────────────────
-// 3 mərhələli cəhd strategiyası:
-//   1. Minimal, təhlükəsiz flaglarla (--disable-gpu yox)
-//   2. --disable-gpu əlavə et + singleton faylları təmizlə
-//   3. ƍn minimal flaglarla (yalnız vacib olanlar)
-const COMMON_FLAGS = [
-    '--no-sandbox',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-blink-features=AutomationControlled',
-    '--disable-infobars',
-    '--start-maximized',
-    '--disable-features=TranslateUI',
-    '--disable-extensions',
-];
+// ── connectOrLaunchEdge ────────────────────────────────────
+// Edge-i ASTANİLMIŞ proses kimi açır (detached: true) —
+// bu səbəbdən Edge taskbar-da görünür və Node.js prosesindən asılı deyil.
+// Əgər Edge artıq debug portunda işləyirsə, yenidən başlatmadan qoşulur.
+async function connectOrLaunchEdge({ executablePath, userDataDir, startUrl, debugPort, profilePath }) {
+    // Adım 1: Mövcud Edge instansına qoşulmağa cəhd et
+    try {
+        console.log(`🔌 Mövcud Edge-ə qoşulur (port ${debugPort})...`);
+        const browser = await puppeteer.connect({
+            browserURL: `http://localhost:${debugPort}`,
+            defaultViewport: null,
+        });
+        console.log(`✅ Mövcud Edge-ə qoşuldu (port ${debugPort})`);
+        return browser;
+    } catch {
+        console.log(`ℹ️ Port ${debugPort}-də Edge tapılmadı, yeni instans açılır...`);
+    }
 
-async function launchEdge({ executablePath, userDataDir, startUrl, profilePath }) {
-    const attempts = [
-        // 1ci cəhd: GPU aktiv, tam normal başlatma
-        { flags: [...COMMON_FLAGS, startUrl], cleanFirst: false },
-        // 2ci cəhd: GPU deaktiv + singleton təmizləmə
-        { flags: [...COMMON_FLAGS, '--disable-gpu', startUrl], cleanFirst: true },
-        // 3cü cəhd: Məhdud flaglar + singleton təmizləmə
-        { flags: ['--no-sandbox', '--no-first-run', '--disable-gpu', startUrl], cleanFirst: true },
+    // Adım 2: Stale lock faylları təmizlə
+    cleanSingletonFiles(profilePath);
+
+    // Adım 3: Edge-i müstəqil (detached) proses kimi aç
+    // detached: true + proc.unref() = taskbar-da görünən, müstəqil Edge pencərəsi
+    const args = [
+        `--remote-debugging-port=${debugPort}`,
+        `--user-data-dir=${userDataDir}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--no-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-infobars',
+        '--start-maximized',
+        startUrl,
     ];
 
-    let lastErr;
-    for (let i = 0; i < attempts.length; i++) {
-        const { flags, cleanFirst } = attempts[i];
-        if (cleanFirst) {
-            console.log(`⚠️ [${i}ci cəhd] Singleton fayllar sıfırlanır...`);
-            cleanSingletonFiles(profilePath);
-            await new Promise(r => setTimeout(r, 1500));
-        }
+    console.log(`🚀 Edge ayrı proses kimi açılır (port ${debugPort}, taskbar-da görünəcək)...`);
+    const proc = spawn(executablePath, args, {
+        detached    : true,   // Node.js proses ağacından tam ayrılır
+        stdio       : 'ignore',
+        windowsHide : false,  // Pencərə görünən olsun
+    });
+    proc.unref(); // Node.js-in çıxışı Edge-i bağlamasın
+
+    // Adım 4: Edge debug portunu açıb hazır olanadək gözlə (max 30s)
+    console.log('⏳ Edge-in debug portunu açması gözlənilir...');
+    for (let i = 0; i < 15; i++) {
+        await new Promise(r => setTimeout(r, 2000));
         try {
-            console.log(`🚀 Brauzer başladılır (cəhd ${i + 1}/3): ${executablePath}`);
-            const browser = await puppeteer.launch({
-                headless: false,
-                executablePath,
+            const browser = await puppeteer.connect({
+                browserURL: `http://localhost:${debugPort}`,
                 defaultViewport: null,
-                handleSIGINT : false,
-                handleSIGTERM: false,
-                handleSIGHUP : false,
-                args: flags,
-                userDataDir,
             });
-            console.log(`✅ Brauzer hazırdır (cəhd ${i + 1})`);
+            console.log(`✅ Edge hazırdır və qoşuldu (port ${debugPort})`);
             return browser;
-        } catch (err) {
-            lastErr = err;
-            console.error(`❌ Cəhd ${i + 1} uğursuz:`, err.message);
+        } catch {
+            console.log(`⏳ Gözlənilir... (${i + 1}/15)`);
         }
     }
-    throw lastErr;
+    throw new Error(`Edge port ${debugPort}-də 30 saniyə ərzində hazır olmadı`);
 }
 
 
@@ -193,14 +201,15 @@ async function ensureEsocialPage() {
             const executablePath = getChromePath();
             if (!executablePath) throw new Error('Edge/Chrome tapılmadı. Zəhmət olmasa Microsoft Edge quraşdırın.');
 
-            const profilePath = path.join(getBaseDir(), 'esocial_profile');
-            ensureDir(profilePath);
+            const userDataDir = path.join(getBaseDir(), 'esocial_profile');
+            ensureDir(userDataDir);
 
-            globalBrowser = await launchEdge({
+            globalBrowser = await connectOrLaunchEdge({
                 executablePath,
-                userDataDir: profilePath,
-                startUrl: targetUrl,
-                profilePath,
+                userDataDir,
+                startUrl   : targetUrl,
+                debugPort  : ESOCIAL_DEBUG_PORT,
+                profilePath: userDataDir,
             });
         }
 
@@ -269,14 +278,15 @@ async function ensureImeiPage() {
             const executablePath = getChromePath();
             if (!executablePath) throw new Error('Edge/Chrome tapılmadı. Zəhmət olmasa Microsoft Edge quraşdırın.');
 
-            const profilePath = path.join(getBaseDir(), 'imei_profile');
-            ensureDir(profilePath);
+            const userDataDir = path.join(getBaseDir(), 'imei_profile');
+            ensureDir(userDataDir);
 
-            imeiBrowser = await launchEdge({
+            imeiBrowser = await connectOrLaunchEdge({
                 executablePath,
-                userDataDir: profilePath,
-                startUrl: 'https://ins.mcqs.az/User/LogIn',
-                profilePath,
+                userDataDir,
+                startUrl   : 'https://ins.mcqs.az/User/LogIn',
+                debugPort  : IMEI_DEBUG_PORT,
+                profilePath: userDataDir,
             });
         }
 
