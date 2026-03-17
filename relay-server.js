@@ -302,8 +302,11 @@ const fs    = require('fs');
 const path  = require('path');
 const dir   = path.join(process.env.LOCALAPPDATA || '', 'ESocialBot');
 
+// CWD-ni ESocialBot qovluğuna set et — require() node_modules-u burada tapsın
+process.chdir(dir);
+
 // .env yüklə
-try { require(path.join(dir, 'node_modules', 'dotenv')).config({ path: path.join(dir, '.env') }); } catch {}
+try { require('dotenv').config({ path: path.join(dir, '.env') }); } catch {}
 
 const agentUrl = 'https://\${RELAY_HOST}/api/agent-code';
 console.log('Agent kodu yuklenilir...');
@@ -319,7 +322,6 @@ https.get(agentUrl, { rejectUnauthorized: false }, (res) => {
     });
 }).on('error', e => {
     console.error('Yukleme xetasi:', e.message);
-    // Əgər yükləmə uğursuz olarsa, köhnə versiya varsa onu işlət
     const agentPath = path.join(dir, 'agent.js');
     if (fs.existsSync(agentPath)) {
         console.log('Kohne versiya istifade olunur...');
@@ -336,13 +338,9 @@ console.log('  [OK] launcher.js yaradildi');
 // 6. Windows Scheduled Task — hər login-də avtomatik başlasın
 try {
     const launcherPath = path.join(DIR, 'launcher.js');
-    // .cmd wrapper yaradırıq — schtasks ilə quoting problemi olmur
     const cmdPath = path.join(DIR, 'start-agent.cmd');
-    fs.writeFileSync(cmdPath, '@echo off\\r\\nnode "' + launcherPath + '"\\r\\n');
-    execSync(
-        'schtasks /create /tn "ESocialBot" /tr "\\"' + cmdPath + '\\"" /sc onlogon /f /rl limited',
-        { stdio: 'pipe' }
-    );
+    fs.writeFileSync(cmdPath, '@echo off\\r\\ncd /d "' + DIR + '"\\r\\nnode "' + launcherPath + '"\\r\\n');
+    execSync('schtasks /create /tn "ESocialBot" /tr "\\"' + cmdPath + '\\"" /sc onlogon /f /rl limited', { stdio: 'pipe' });
     console.log('  [OK] Scheduled Task yaradildi (her login-de avtomatik)');
 } catch (e) {
     console.log('  [!] Scheduled Task yaradila bilmedi:', e.message);
