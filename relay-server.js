@@ -376,50 +376,49 @@ require(path.join(DIR, 'launcher.js'));
     res.type('application/javascript').send(script);
 });
 
-// E-Social scrape — agentLabel optional, verilirsə həmin agente gedir
-app.post('/api/scrape', async (req, res) => {
-    try {
-        const { agentLabel, ...payload } = req.body;
-        const result = await sendJobToAgent('scrape', payload, agentLabel);
-        res.json(result);
-    } catch (err) {
-        res.status(err.code || 500).json({ error: err.message });
-    }
+// ── İş endpointləri ARTIQ BURDA DEYİL ────────────────────────
+// Bütün işlər LOCAL agentdə (localhost:3001) icra olunur.
+// Relay serverdən iş göndərmək mümkün deyil.
+app.post('/api/scrape', (_req, res) => {
+    res.status(400).json({
+        error: 'Bu endpoint artiq relay serverde yoxdur!',
+        message: 'Sorgunuzu oz PC-nizdeki agente gonderin.',
+        url: 'http://localhost:3001/api/scrape',
+        example: 'POST http://localhost:3001/api/scrape  {fin:"...", sv:"..."}'
+    });
 });
 
-// IMEI check — agentLabel optional
-app.post('/api/check-imei', async (req, res) => {
-    try {
-        const { agentLabel, ...payload } = req.body;
-        const result = await sendJobToAgent('check-imei', payload, agentLabel);
-        res.json(result);
-    } catch (err) {
-        res.status(err.code || 500).json({ error: err.message });
-    }
+app.post('/api/check-imei', (_req, res) => {
+    res.status(400).json({
+        error: 'Bu endpoint artiq relay serverde yoxdur!',
+        message: 'Sorgunuzu oz PC-nizdeki agente gonderin.',
+        url: 'http://localhost:3001/api/check-imei',
+        example: 'POST http://localhost:3001/api/check-imei  {imei:"..."}'
+    });
 });
 
 // ── 404 və global xəta handler ──────────────────────────────
 app.use((req, res) => {
-    res.status(404).json({ error: `Route tapilmadi: ${req.method} ${req.url}` });
+    res.status(404).json({ error: 'Route tapilmadi: ' + req.method + ' ' + req.url });
 });
 
 app.use((err, req, res, _next) => {
-    console.error('Express xətası:', err.message);
-    res.status(500).json({ error: err.message || 'Daxili server xətası' });
+    console.error('Express xetasi:', err.message);
+    res.status(500).json({ error: err.message || 'Daxili server xetasi' });
 });
 
 // ── Server Start ─────────────────────────────────────────────
 server.listen(PORT, () => {
-    console.log(`
-***************************************************
-🚀 RELAY SERVER BAŞLADI!
-📍 Port   : ${PORT}
-🔑 Secret : ${AGENT_SECRET}
-⚙️  Endpoints:
-   GET  /              (health check)
-   GET  /api/status    (agent list)
-   POST /api/scrape    (→ lokal agent)
-   POST /api/check-imei (→ lokal agent)
-***************************************************
-`);
+    console.log('\n***************************************************');
+    console.log('  RELAY SERVER BASLADI!');
+    console.log('  Port   : ' + PORT);
+    console.log('  Endpoints:');
+    console.log('    GET  /              (health check)');
+    console.log('    GET  /api/status    (agent list)');
+    console.log('    GET  /api/install   (agent qurasdirma)');
+    console.log('');
+    console.log('  IS ENDPOINTLERI YALNIZ LOKAL AGENTDE:');
+    console.log('    POST http://localhost:3001/api/scrape');
+    console.log('    POST http://localhost:3001/api/check-imei');
+    console.log('***************************************************\n');
 });
