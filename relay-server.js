@@ -222,6 +222,81 @@ app.get('/api/status', (_req, res) => {
     res.json({ agents: list, pendingJobs: pendingJobs.size });
 });
 
+// Agent kodunu servis et — agent həmişə ən son versiyanı yükləyir
+app.get('/api/agent-code', async (_req, res) => {
+    try {
+        const fetch = (await import('node-fetch')).default;
+        const r = await fetch('https://raw.githubusercontent.com/ArifBabayev05/scrapev2/main/agent.js');
+        if (!r.ok) throw new Error('GitHub cavab vermədi');
+        const code = await r.text();
+        res.type('application/javascript').send(code);
+    } catch (err) {
+        res.status(500).json({ error: 'Agent kodu yüklənə bilmədi: ' + err.message });
+    }
+});
+
+// PowerShell setup one-liner — userlərə göndərilir
+app.get('/api/setup', (_req, res) => {
+    const relayUrl = `wss://${_req.headers.host}`;
+    const ps = `
+$d="$env:LOCALAPPDATA\\ESocialBot"
+New-Item -ItemType Directory -Path $d -Force | Out-Null
+
+# Launcher — həmişə ən son agent kodunu Railway-dən yükləyib işlədir
+@"
+const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
+const { execSync } = require('child_process');
+const dir   = path.join(process.env.LOCALAPPDATA, 'ESocialBot');
+
+// .env yarat (əgər yoxdursa)
+const envPath = path.join(dir, '.env');
+if (!fs.existsSync(envPath)) {
+    fs.writeFileSync(envPath, 'RELAY_URL=${relayUrl}\\nAGENT_SECRET=bot-secret-2024\\nAGENT_LABEL=' + require('os').hostname() + '\\nESOCIAL_DEBUG_PORT=9222\\nIMEI_DEBUG_PORT=9223\\n');
+}
+
+// package.json yarat (əgər yoxdursa)
+const pkgPath = path.join(dir, 'package.json');
+if (!fs.existsSync(pkgPath)) {
+    fs.writeFileSync(pkgPath, JSON.stringify({dependencies:{'ws':'^8','puppeteer-core':'^24','dotenv':'^16'}}) );
+}
+
+// npm install (ilk dəfə)
+if (!fs.existsSync(path.join(dir, 'node_modules'))) {
+    console.log('Paketlər yüklənir...');
+    execSync('npm install --production --no-fund --no-audit', { cwd: dir, stdio: 'inherit' });
+}
+
+// Agent kodunu yüklə
+const url = '${relayUrl.replace('wss://', 'https://')}/api/agent-code';
+https.get(url, { rejectUnauthorized: false }, (r) => {
+    let body = '';
+    r.on('data', c => body += c);
+    r.on('end', () => {
+        const agentPath = path.join(dir, 'agent.js');
+        fs.writeFileSync(agentPath, body);
+        console.log('Agent kodu yükləndi, başladılır...');
+        require(agentPath);
+    });
+}).on('error', e => { console.error('Yükləmə xətası:', e.message); process.exit(1); });
+"@ | Out-File "$d\\launcher.js" -Encoding utf8
+
+# Scheduled Task — hər login-də avtomatik başlasın
+schtasks /create /tn "ESocialBot" /tr "node \`"$d\\launcher.js\`"" /sc onlogon /f /rl limited | Out-Null
+Write-Host ""
+Write-Host "  [OK] ESocial Bot qurasdirildl!" -ForegroundColor Green
+Write-Host "  [OK] Her login-de avtomatik baslayacaq" -ForegroundColor Green
+Write-Host "  [..] Indi basladilir..." -ForegroundColor Yellow
+Write-Host ""
+
+# Dərhal başlat
+Start-Process node -ArgumentList "\`"$d\\launcher.js\`"" -WindowStyle Normal
+`.trim();
+
+    res.type('text/plain').send(ps);
+});
+
 // E-Social scrape
 app.post('/api/scrape', async (req, res) => {
     try {
