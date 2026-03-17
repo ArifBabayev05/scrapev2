@@ -90,8 +90,63 @@ const cleanSingletonFiles = (profilePath) => {
         });
 };
 
+// ── Shared browser launch helper ────────────────────────────
+// 3 mərhələli cəhd strategiyası:
+//   1. Minimal, təhlükəsiz flaglarla (--disable-gpu yox)
+//   2. --disable-gpu əlavə et + singleton faylları təmizlə
+//   3. ƍn minimal flaglarla (yalnız vacib olanlar)
+const COMMON_FLAGS = [
+    '--no-sandbox',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-infobars',
+    '--start-maximized',
+    '--disable-features=TranslateUI',
+    '--disable-extensions',
+];
 
-// ── Browser + Page instances (persistent — tab 1 dəfə açılır) ─
+async function launchEdge({ executablePath, userDataDir, startUrl, profilePath }) {
+    const attempts = [
+        // 1ci cəhd: GPU aktiv, tam normal başlatma
+        { flags: [...COMMON_FLAGS, startUrl], cleanFirst: false },
+        // 2ci cəhd: GPU deaktiv + singleton təmizləmə
+        { flags: [...COMMON_FLAGS, '--disable-gpu', startUrl], cleanFirst: true },
+        // 3cü cəhd: Məhdud flaglar + singleton təmizləmə
+        { flags: ['--no-sandbox', '--no-first-run', '--disable-gpu', startUrl], cleanFirst: true },
+    ];
+
+    let lastErr;
+    for (let i = 0; i < attempts.length; i++) {
+        const { flags, cleanFirst } = attempts[i];
+        if (cleanFirst) {
+            console.log(`⚠️ [${i}ci cəhd] Singleton fayllar sıfırlanır...`);
+            cleanSingletonFiles(profilePath);
+            await new Promise(r => setTimeout(r, 1500));
+        }
+        try {
+            console.log(`🚀 Brauzer başladılır (cəhd ${i + 1}/3): ${executablePath}`);
+            const browser = await puppeteer.launch({
+                headless: false,
+                executablePath,
+                defaultViewport: null,
+                handleSIGINT : false,
+                handleSIGTERM: false,
+                handleSIGHUP : false,
+                args: flags,
+                userDataDir,
+            });
+            console.log(`✅ Brauzer hazırdır (cəhd ${i + 1})`);
+            return browser;
+        } catch (err) {
+            lastErr = err;
+            console.error(`❌ Cəhd ${i + 1} uğursuz:`, err.message);
+        }
+    }
+    throw lastErr;
+}
+
+
 let globalBrowser    = null;
 let globalEsocialPage = null;   // E-Social üçün sabit tab
 let isLaunching      = false;
@@ -135,78 +190,18 @@ async function ensureEsocialPage() {
         const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
 
         if (!globalBrowser) {
-            const chromePath = getChromePath();
-            if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
+            const executablePath = getChromePath();
+            if (!executablePath) throw new Error('Edge/Chrome tapılmadı. Zəhmət olmasa Microsoft Edge quraşdırın.');
 
             const profilePath = path.join(getBaseDir(), 'esocial_profile');
             ensureDir(profilePath);
 
-            // İlk cəhd — singleton təmizləmədən aç
-            try {
-                globalBrowser = await puppeteer.launch({
-                    headless: false,
-                    executablePath: chromePath,
-                    defaultViewport: null,
-                    pipe: false,
-                    handleSIGINT: false,
-                    handleSIGTERM: false,
-                    handleSIGHUP: false,
-                    ignoreDefaultArgs: ['--enable-automation'],
-                    args: [
-                        '--test-type',
-                        '--start-maximized',
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--no-first-run',
-                        '--no-default-browser-check',
-                        '--disable-extensions',
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-gpu',
-                        '--disable-dev-shm-usage',
-                        '--disable-background-timer-throttling',
-                        '--disable-backgrounding-occluded-windows',
-                        '--disable-renderer-backgrounding',
-                        '--disable-infobars',
-                        '--disable-features=TranslateUI',
-                        targetUrl
-                    ],
-                    userDataDir: profilePath
-                });
-            } catch (launchErr) {
-                // Stale lock fayllar varsa, təmizləyərək yenidən cəhd et
-                console.log('⚠️ [E-Social] 1ci cəhd uğursuz, singleton fayllar sıfırlanır...');
-                cleanSingletonFiles(profilePath);
-                await new Promise(r => setTimeout(r, 1500));
-                globalBrowser = await puppeteer.launch({
-                    headless: false,
-                    executablePath: chromePath,
-                    defaultViewport: null,
-                    pipe: false,
-                    handleSIGINT: false,
-                    handleSIGTERM: false,
-                    handleSIGHUP: false,
-                    ignoreDefaultArgs: ['--enable-automation'],
-                    args: [
-                        '--test-type',
-                        '--start-maximized',
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--no-first-run',
-                        '--no-default-browser-check',
-                        '--disable-extensions',
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-gpu',
-                        '--disable-dev-shm-usage',
-                        '--disable-background-timer-throttling',
-                        '--disable-backgrounding-occluded-windows',
-                        '--disable-renderer-backgrounding',
-                        '--disable-infobars',
-                        '--disable-features=TranslateUI',
-                        targetUrl
-                    ],
-                    userDataDir: profilePath
-                });
-            }
+            globalBrowser = await launchEdge({
+                executablePath,
+                userDataDir: profilePath,
+                startUrl: targetUrl,
+                profilePath,
+            });
         }
 
         // İlk tab-ı götür (brauzer targetUrl ilə açılır)
@@ -271,67 +266,18 @@ async function ensureImeiPage() {
     isImeiLaunching = true;
     try {
         if (!imeiBrowser) {
-            const chromePath = getChromePath();
-            if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
+            const executablePath = getChromePath();
+            if (!executablePath) throw new Error('Edge/Chrome tapılmadı. Zəhmət olmasa Microsoft Edge quraşdırın.');
 
             const profilePath = path.join(getBaseDir(), 'imei_profile');
             ensureDir(profilePath);
 
-            // İlk cəhd — singleton təmizləmədən aç
-            try {
-                imeiBrowser = await puppeteer.launch({
-                    headless: false,
-                    executablePath: chromePath,
-                    defaultViewport: null,
-                    ignoreDefaultArgs: ['--enable-automation'],
-                    args: [
-                        '--test-type',
-                        '--start-maximized',
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--no-first-run',
-                        '--no-default-browser-check',
-                        '--disable-extensions',
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-gpu',
-                        '--disable-dev-shm-usage',
-                        '--disable-infobars',
-                        '--disable-features=TranslateUI',
-                        '--password-store=basic',
-                        '--use-mock-keychain',
-                        'https://ins.mcqs.az/User/LogIn'
-                    ],
-                    userDataDir: profilePath
-                });
-            } catch (launchErr) {
-                console.log('⚠️ [IMEI] 1ci cəhd uğursuz, singleton fayllar sıfırlanır...');
-                cleanSingletonFiles(profilePath);
-                await new Promise(r => setTimeout(r, 1500));
-                imeiBrowser = await puppeteer.launch({
-                    headless: false,
-                    executablePath: chromePath,
-                    defaultViewport: null,
-                    ignoreDefaultArgs: ['--enable-automation'],
-                    args: [
-                        '--test-type',
-                        '--start-maximized',
-                        '--no-sandbox',
-                        '--disable-setuid-sandbox',
-                        '--no-first-run',
-                        '--no-default-browser-check',
-                        '--disable-extensions',
-                        '--disable-blink-features=AutomationControlled',
-                        '--disable-gpu',
-                        '--disable-dev-shm-usage',
-                        '--disable-infobars',
-                        '--disable-features=TranslateUI',
-                        '--password-store=basic',
-                        '--use-mock-keychain',
-                        'https://ins.mcqs.az/User/LogIn'
-                    ],
-                    userDataDir: profilePath
-                });
-            }
+            imeiBrowser = await launchEdge({
+                executablePath,
+                userDataDir: profilePath,
+                startUrl: 'https://ins.mcqs.az/User/LogIn',
+                profilePath,
+            });
         }
 
         // İlk tab-ı götür (brauzer Login URL ilə açılır)
