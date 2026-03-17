@@ -11,6 +11,7 @@ const http       = require('http');
 const { WebSocketServer, WebSocket } = require('ws');
 const cors       = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const puppeteer  = require('puppeteer');
 
 const app    = express();
 const server = http.createServer(app);
@@ -232,13 +233,17 @@ app.post('/api/scrape', async (req, res) => {
     }
 });
 
-// IMEI check
+// IMEI check — CLOUD HEADLESS (heç bir lokal agent lazım deyil)
 app.post('/api/check-imei', async (req, res) => {
     try {
-        const result = await sendJobToAgent('check-imei', req.body);
+        const { imei } = req.body;
+        if (!imei) return res.status(400).json({ error: 'IMEI daxil edilməyib' });
+        console.log(`🔍 [IMEI] Cloud headless başladı: ${imei}`);
+        const result = await runImeiCloud(imei);
         res.json(result);
     } catch (err) {
-        res.status(err.code || 500).json({ error: err.message });
+        console.error('❌ [IMEI] Cloud xətası:', err.message);
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -253,6 +258,103 @@ app.use((err, req, res, _next) => {
     res.status(500).json({ error: err.message || 'Daxili server xətası' });
 });
 
+// ── IMEI Cloud Headless Logic ─────────────────────────────
+// Railway-də headless Chromium işləyir, lokal agent lazım deyil.
+let imeiBrowser = null;
+let imeiPage    = null;
+
+const IMEI_USER = process.env.IMEI_USERNAME || 'aziza_nasirova';
+const IMEI_PASS = process.env.IMEI_PASSWORD || 'leqal2025';
+
+async function getImeiBrowser() {
+    if (imeiBrowser) {
+        try { await imeiBrowser.version(); return imeiBrowser; }
+        catch { imeiBrowser = null; imeiPage = null; }
+    }
+    imeiBrowser = await puppeteer.launch({
+        headless: 'new',
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-first-run',
+        ],
+    });
+    console.log('✅ [IMEI] Headless brauzer başladı');
+    return imeiBrowser;
+}
+
+async function ensureImeiLoggedIn(page) {
+    const cur = page.url();
+    if (cur.includes('CreditApplication') || cur.includes('CheckImeiStatus')) return;
+
+    await page.goto('https://ins.mcqs.az/User/LogIn', {
+        waitUntil: 'networkidle2',
+        timeout: 60000,
+    });
+
+    const loginField = await page.$('#username');
+    if (loginField) {
+        console.log('🔐 [IMEI] Login olunur...');
+        await page.type('#username', IMEI_USER);
+        await page.type('#password', IMEI_PASS);
+        await page.click('#loginbutton');
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {});
+        if (await page.$('#username')) throw new Error('IMEI login uğursuz oldu');
+        console.log('✅ [IMEI] Login uğurlu');
+    }
+}
+
+async function runImeiCloud(imei) {
+    const browser = await getImeiBrowser();
+
+    // Persistent page istifadə et
+    if (imeiPage) {
+        try { await imeiPage.evaluate(() => document.title); }
+        catch { imeiPage = null; }
+    }
+    if (!imeiPage) {
+        imeiPage = await browser.newPage();
+        await imeiPage.setDefaultNavigationTimeout(60000);
+    }
+    const page = imeiPage;
+
+    // Login
+    await ensureImeiLoggedIn(page);
+
+    // CheckImeiStatus səhifəsinə keç
+    if (!page.url().includes('CreditApplication') && !page.url().includes('CheckImeiStatus')) {
+        await page.goto('https://ins.mcqs.az/CreditApplication/Index', { waitUntil: 'networkidle2' });
+    }
+
+    await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 10000 });
+    await page.click('li[data-url*="CheckImeiStatus"] a');
+    await new Promise(r => setTimeout(r, 1000));
+
+    // IMEI daxil et və yoxla
+    await page.click('#getimeicode', { clickCount: 3 });
+    await page.keyboard.type(imei);
+    await page.click('#checkimeistatus');
+
+    let statusText = '';
+    for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+            statusText = await page.$eval('#imeiStatus b', el => el.innerText.trim());
+            if (statusText && statusText.length > 5) break;
+        } catch {}
+    }
+
+    if (!statusText) statusText = 'RESULT_NOT_FOUND';
+    console.log(`✅ [IMEI] Nəticə: ${statusText.slice(0, 60)}...`);
+
+    return {
+        imeiFee: statusText.endsWith('deaktiv olunub.'),
+        message: statusText,
+    };
+}
+
 // ── Server Start ─────────────────────────────────────────────
 server.listen(PORT, () => {
     console.log(`
@@ -261,10 +363,13 @@ server.listen(PORT, () => {
 📍 Port   : ${PORT}
 🔑 Secret : ${AGENT_SECRET}
 ⚙️  Endpoints:
-   GET  /            (health check)
-   GET  /api/status  (agent list)
-   POST /api/scrape
-   POST /api/check-imei
+   GET  /              (health check)
+   GET  /api/status    (agent list)
+   POST /api/scrape    (→ lokal agent, Asan İmza lazım)
+   POST /api/check-imei (→ cloud headless, lazım deyil)
 ***************************************************
 `);
+
+    // Headless brauzeri əvvəlcədən başlat
+    getImeiBrowser().catch(e => console.error('IMEI brauzer xətası:', e.message));
 });
