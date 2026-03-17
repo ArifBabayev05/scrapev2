@@ -194,18 +194,33 @@ async function ensureEsocialPage() {
             });
         }
 
-        // İlk tab-ı götür, artıq tabları bağla
+        // Mövcud tabları yoxla
         const pages = await globalBrowser.pages();
-        globalEsocialPage = pages[0];
+        
+        // 1. Target URL olan tab varmı?
+        globalEsocialPage = pages.find(p => p.url().includes('e-social.gov.az'));
 
-        // Artıq tabları bağla (dublikatları önlə)
-        for (let i = 1; i < pages.length; i++) {
-            try { await pages[i].close(); } catch {}
+        // 2. Yoxdursa, ilk tabı götür
+        if (!globalEsocialPage && pages.length > 0) {
+            globalEsocialPage = pages[0];
+        }
+
+        // 3. Heç tab yoxdursa (nadir hal), yeni aç
+        if (!globalEsocialPage) {
+            globalEsocialPage = await globalBrowser.newPage();
+        }
+
+        // Artıq tabları bağla (yalnız 1 tab qalsın)
+        for (const p of pages) {
+            if (p !== globalEsocialPage) {
+                try { await p.close(); } catch {}
+            }
         }
 
         if (globalEsocialPage) {
             const curUrl = globalEsocialPage.url();
-            if (!curUrl.includes('e-social.gov.az')) {
+            if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('e-social.gov.az')) {
+                console.log('🔄 [E-Social] Tab yönləndirilir:', targetUrl);
                 await globalEsocialPage.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
             }
         }
@@ -276,19 +291,35 @@ async function ensureImeiPage() {
             });
         }
 
-        // İlk tab-ı götür, artıq tabları bağla
+        // Mövcud tabları yoxla
         const pages = await imeiBrowser.pages();
-        globalImeiPage = pages[0];
+        
+        // 1. Target URL olan tab varmı?
+        globalImeiPage = pages.find(p => p.url().includes('ins.mcqs.az'));
 
-        // Artıq tabları bağla (dublikatları önlə)
-        for (let i = 1; i < pages.length; i++) {
-            try { await pages[i].close(); } catch {}
+        // 2. Yoxdursa, ilk tabı götür
+        if (!globalImeiPage && pages.length > 0) {
+            globalImeiPage = pages[0];
+        }
+
+        // 3. Heç tab yoxdursa, yeni aç
+        if (!globalImeiPage) {
+            globalImeiPage = await imeiBrowser.newPage();
+        }
+
+        // Artıq tabları bağla (yalnız 1 tab qalsın)
+        for (const p of pages) {
+            if (p !== globalImeiPage) {
+                try { await p.close(); } catch {}
+            }
         }
 
         if (globalImeiPage) {
             const curUrl = globalImeiPage.url();
-            if (!curUrl.includes('ins.mcqs.az')) {
-                await globalImeiPage.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'networkidle2', timeout: 60000 });
+            const targetUrl = 'https://ins.mcqs.az/User/LogIn';
+            if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('ins.mcqs.az')) {
+                console.log('🔄 [IMEI] Tab yönləndirilir:', targetUrl);
+                await globalImeiPage.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
             }
         }
 
@@ -481,9 +512,14 @@ async function runImeiJob(body) {
         await page.goto('https://ins.mcqs.az/CreditApplication/Index', { waitUntil: 'networkidle2' });
     }
 
-    await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 10000 });
-    await page.click('li[data-url*="CheckImeiStatus"] a');
-    await new Promise(r => setTimeout(r, 1000));
+    // Əgər artıq IMEI yoxlama səhifəsindəyiksə (form görünürsə), təkrar klikləmə
+    const isAlreadyOnCheck = await page.$('#getimeicode');
+    if (!isAlreadyOnCheck) {
+        console.log('🔄 [IMEI] Yoxlama bölməsinə keçilir...');
+        await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 10000 });
+        await page.click('li[data-url*="CheckImeiStatus"] a');
+        await new Promise(r => setTimeout(r, 1000));
+    }
 
     await page.click('#getimeicode', { clickCount: 3 });
     await page.keyboard.type(imei);
