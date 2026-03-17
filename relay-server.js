@@ -51,6 +51,7 @@ const agents = new Map();
 const pendingJobs = new Map();
 
 // ── Helpers ─────────────────────────────────────────────────
+// Mövcud boş agent tap
 function getAvailableAgent() {
     for (const [agentId, agent] of agents) {
         if (!agent.busy && agent.ws.readyState === WebSocket.OPEN) {
@@ -60,8 +61,26 @@ function getAvailableAgent() {
     return null;
 }
 
-function sendJobToAgent(jobType, payload) {
-    const available = getAvailableAgent();
+// Agent yoxdursa waitMs müddətinə qədər gözlə (500ms aralıqla yoxla)
+// Railway redeploy zamanı agent ~5s ərzində yenidən qoşulur —
+// bu funksiya o reconnect-i gözləyir.
+async function waitForAgent(waitMs = 15_000) {
+    const deadline = Date.now() + waitMs;
+    while (Date.now() < deadline) {
+        const found = getAvailableAgent();
+        if (found) return found;
+        await new Promise(r => setTimeout(r, 500));
+    }
+    return null;
+}
+
+async function sendJobToAgent(jobType, payload) {
+    // Əvvəlcə dərhal yoxla; tapılmasa agent qoşulana qədər gözlə
+    let available = getAvailableAgent();
+    if (!available) {
+        console.log('⏳ Agent tapılmadı, 15s gözlənilir...');
+        available = await waitForAgent(15_000);
+    }
 
     if (!available) {
         const err = new Error(
