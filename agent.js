@@ -1,36 +1,40 @@
 'use strict';
 
-/**
- * ESOCIAL BOT - LOCAL AGENT
- * This version uses separate browser instances for E-Social and IMEI checks
- * as requested to ensure maximum stability and zero interference.
- */
+// ============================================================
+// ESOCIAL BOT — LOCAL AGENT
+// Her userin oz PC-sinde isleyir.
+// LOCAL HTTP server (port 3001) — user oz kompunda istek gonderir.
+// Relay WebSocket — monitoring ucun.
+// ============================================================
 
-try { require('dotenv').config(); } catch {}
+try { require('dotenv').config(); } catch (e) {}
 
-process.on('uncaughtException',  (err) => console.error('CRITICAL ERROR:', err));
-process.on('unhandledRejection', (err) => console.error('UNHANDLED PROMISE:', err));
+process.on('uncaughtException',  function(err) { console.error('CRITICAL ERROR:', err); });
+process.on('unhandledRejection', function(err) { console.error('UNHANDLED PROMISE:', err); });
 
-const { WebSocket }             = require('ws');
-let puppeteer; try { puppeteer = require('puppeteer'); } catch { puppeteer = require('puppeteer-core'); }
-const fs                        = require('fs');
-const path                      = require('path');
-const os                        = require('os');
+var WebSocket  = require('ws').WebSocket;
+var puppeteer;
+try { puppeteer = require('puppeteer'); } catch (e) { puppeteer = require('puppeteer-core'); }
+var fs   = require('fs');
+var path = require('path');
+var os   = require('os');
+var http = require('http');
 
 // ── Config ───────────────────────────────────────────────────
-const RELAY_URL           = (process.env.RELAY_URL    || 'ws://localhost:3000').replace(/\/$/, '');
-const AGENT_SECRET        = process.env.AGENT_SECRET  || 'bot-secret-2024';
-const AGENT_LABEL         = process.env.AGENT_LABEL   || os.hostname();
-const ESOCIAL_PORT        = parseInt(process.env.ESOCIAL_DEBUG_PORT || '9222');
-const IMEI_PORT           = parseInt(process.env.IMEI_DEBUG_PORT    || '9223');
+var RELAY_URL    = (process.env.RELAY_URL    || 'ws://localhost:3000').replace(/\/$/, '');
+var AGENT_SECRET = process.env.AGENT_SECRET  || 'bot-secret-2024';
+var AGENT_LABEL  = process.env.AGENT_LABEL   || os.hostname();
+var ESOCIAL_PORT = parseInt(process.env.ESOCIAL_DEBUG_PORT || '9222');
+var IMEI_PORT    = parseInt(process.env.IMEI_DEBUG_PORT    || '9223');
+var LOCAL_PORT   = parseInt(process.env.LOCAL_PORT || '3001');
 
 // ── Chrome path ──────────────────────────────────────────────
-const getChromePath = () => {
-    const pf86    = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
-    const pf64    = process.env['ProgramFiles']       || 'C:\\Program Files';
-    const appdata = process.env['LOCALAPPDATA']       || path.join(os.homedir(), 'AppData', 'Local');
+function getChromePath() {
+    var pf86    = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    var pf64    = process.env['ProgramFiles']       || 'C:\\Program Files';
+    var appdata = process.env['LOCALAPPDATA']       || path.join(os.homedir(), 'AppData', 'Local');
 
-    const candidates = [
+    var candidates = [
         path.join(pf86,    'Microsoft', 'Edge', 'Application', 'msedge.exe'),
         path.join(pf64,    'Microsoft', 'Edge', 'Application', 'msedge.exe'),
         path.join(appdata, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
@@ -39,95 +43,101 @@ const getChromePath = () => {
         path.join(appdata, 'Google', 'Chrome', 'Application', 'chrome.exe'),
     ];
 
-    for (const c of candidates) {
-        if (fs.existsSync(c)) return c;
+    for (var i = 0; i < candidates.length; i++) {
+        if (fs.existsSync(candidates[i])) return candidates[i];
     }
     return null;
-};
+}
 
-const getBaseDir = () => path.join(os.homedir(), 'AppData', 'Local', 'ESocialBot');
+function getBaseDir() {
+    return path.join(os.homedir(), 'AppData', 'Local', 'ESocialBot');
+}
 
-const ensureDir = (dir) => {
+function ensureDir(dir) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-};
+}
 
 // ── Single Instance Lock ─────────────────────────────────────
-const lockFile = path.join(getBaseDir(), 'agent.lock');
-const checkSingleInstance = () => {
+var lockFile = path.join(getBaseDir(), 'agent.lock');
+function checkSingleInstance() {
     ensureDir(getBaseDir());
     if (fs.existsSync(lockFile)) {
         try {
-            const pid = parseInt(fs.readFileSync(lockFile, 'utf8'));
-            process.kill(pid, 0); 
-            console.error('⚠️ Agent artiq basqa pencederede isleyir (PID: ' + pid + ').');
+            var pid = parseInt(fs.readFileSync(lockFile, 'utf8'));
+            process.kill(pid, 0);
+            console.error('Agent artiq basqa pencerede isleyir (PID: ' + pid + ').');
             process.exit(0);
-        } catch {
+        } catch (e) {
             fs.unlinkSync(lockFile);
         }
     }
     fs.writeFileSync(lockFile, process.pid.toString());
-    process.on('exit', () => { try { fs.unlinkSync(lockFile); } catch {} });
-};
+    process.on('exit', function() { try { fs.unlinkSync(lockFile); } catch (e) {} });
+}
 checkSingleInstance();
 
 // ── Browser Management ───────────────────────────────────────
-let globalEsocialBrowser = null;
-let globalImeiBrowser    = null;
-let globalEsocialPage    = null;
-let globalImeiPage       = null;
-let isLaunchingEsocial   = false;
-let isLaunchingImei      = false;
+var globalEsocialBrowser = null;
+var globalImeiBrowser    = null;
+var globalEsocialPage    = null;
+var globalImeiPage       = null;
+var isLaunchingEsocial   = false;
+var isLaunchingImei      = false;
 
-const cleanSingletonFiles = (profilePath) => {
-    ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'DevToolsActivePort']
-        .forEach(f => {
-            try { fs.unlinkSync(path.join(profilePath, f)); } catch {}
-        });
-};
+function cleanSingletonFiles(profilePath) {
+    var files = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'DevToolsActivePort'];
+    for (var i = 0; i < files.length; i++) {
+        try { fs.unlinkSync(path.join(profilePath, files[i])); } catch (e) {}
+    }
+}
 
 async function ensureBrowser(service) {
-    const isEsocial = service === 'esocial';
-    const port      = isEsocial ? ESOCIAL_PORT : IMEI_PORT;
-    const profile   = isEsocial ? 'esocial_profile' : 'imei_profile';
-    
+    var isEsocial = service === 'esocial';
+    var port      = isEsocial ? ESOCIAL_PORT : IMEI_PORT;
+    var profile   = isEsocial ? 'esocial_profile' : 'imei_profile';
+
+    // Basqa cagirish artiq acirsa, gozle
     if (isEsocial ? isLaunchingEsocial : isLaunchingImei) {
-        for (let i = 0; i < 30; i++) {
-            await new Promise(r => setTimeout(r, 500));
+        for (var i = 0; i < 30; i++) {
+            await new Promise(function(r) { setTimeout(r, 500); });
             if (isEsocial ? globalEsocialBrowser : globalImeiBrowser) break;
         }
     }
 
-    let browser = isEsocial ? globalEsocialBrowser : globalImeiBrowser;
+    var browser = isEsocial ? globalEsocialBrowser : globalImeiBrowser;
     if (browser) {
         try {
             await browser.version();
             return browser;
-        } catch {
+        } catch (e) {
             if (isEsocial) globalEsocialBrowser = null; else globalImeiBrowser = null;
         }
     }
 
     if (isEsocial) isLaunchingEsocial = true; else isLaunchingImei = true;
     try {
-        // Try connect first
+        // Movcud brauzere qosulma cehdi
         try {
-            browser = await puppeteer.connect({ browserURL: 'http://localhost:' + port, defaultViewport: null });
+            browser = await puppeteer.connect({
+                browserURL: 'http://localhost:' + port,
+                defaultViewport: null
+            });
             if (isEsocial) globalEsocialBrowser = browser; else globalImeiBrowser = browser;
-            console.log('✅ [' + service + '] Movcud brauzere qosuldu (Port: ' + port + ')');
+            console.log('[' + service + '] Movcud brauzere qosuldu (Port: ' + port + ')');
             return browser;
-        } catch {}
+        } catch (e) {}
 
-        // Launch new
-        const executablePath = getChromePath();
-        const userDataDir = path.join(getBaseDir(), profile);
+        // Yeni acilish
+        var executablePath = getChromePath();
+        var userDataDir = path.join(getBaseDir(), profile);
         ensureDir(userDataDir);
         cleanSingletonFiles(userDataDir);
 
         browser = await puppeteer.launch({
-            executablePath,
+            executablePath: executablePath,
             headless: false,
             defaultViewport: null,
-            userDataDir,
+            userDataDir: userDataDir,
             args: [
                 '--remote-debugging-port=' + port,
                 '--no-first-run',
@@ -140,10 +150,10 @@ async function ensureBrowser(service) {
         });
 
         if (isEsocial) globalEsocialBrowser = browser; else globalImeiBrowser = browser;
-        console.log(`🚀 [${service}] Yeni brauzer acildi (Port: ${port})`);
+        console.log('[' + service + '] Yeni brauzer acildi (Port: ' + port + ')');
 
-        browser.on('disconnected', () => {
-            console.log(`⚠️ [${service}] Brauzer pencesi baglandi`);
+        browser.on('disconnected', function() {
+            console.log('[' + service + '] Brauzer baglandi');
             if (isEsocial) { globalEsocialBrowser = null; globalEsocialPage = null; }
             else { globalImeiBrowser = null; globalImeiPage = null; }
         });
@@ -156,87 +166,89 @@ async function ensureBrowser(service) {
 
 async function ensureEsocialPage() {
     if (globalEsocialPage) {
-        try { await globalEsocialPage.evaluate(() => true); return globalEsocialPage; }
-        catch { globalEsocialPage = null; }
+        try { await globalEsocialPage.evaluate(function() { return true; }); return globalEsocialPage; }
+        catch (e) { globalEsocialPage = null; }
     }
-    const browser = await ensureBrowser('esocial');
-    const pages = await browser.pages();
-    globalEsocialPage = pages.find(p => p.url().includes('e-social.gov.az'));
+    var browser = await ensureBrowser('esocial');
+    var pages = await browser.pages();
+    globalEsocialPage = pages.find(function(p) { return p.url().indexOf('e-social.gov.az') >= 0; });
     if (!globalEsocialPage) {
-        const blank = pages.find(p => p.url() === 'about:blank' || p.url() === '');
+        var blank = pages.find(function(p) { return p.url() === 'about:blank' || p.url() === ''; });
         globalEsocialPage = blank || await browser.newPage();
     }
-    const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
-    if (!globalEsocialPage.url().includes('e-social.gov.az')) {
+    var targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
+    if (globalEsocialPage.url().indexOf('e-social.gov.az') < 0) {
         await globalEsocialPage.goto(targetUrl, { waitUntil: 'domcontentloaded' });
     }
-    try { await globalEsocialPage.bringToFront(); } catch {}
+    try { await globalEsocialPage.bringToFront(); } catch (e) {}
     return globalEsocialPage;
 }
 
 async function ensureImeiPage() {
     if (globalImeiPage) {
-        try { await globalImeiPage.evaluate(() => true); return globalImeiPage; }
-        catch { globalImeiPage = null; }
+        try { await globalImeiPage.evaluate(function() { return true; }); return globalImeiPage; }
+        catch (e) { globalImeiPage = null; }
     }
-    const browser = await ensureBrowser('imei');
-    const pages = await browser.pages();
-    globalImeiPage = pages.find(p => p.url().includes('ins.mcqs.az'));
+    var browser = await ensureBrowser('imei');
+    var pages = await browser.pages();
+    globalImeiPage = pages.find(function(p) { return p.url().indexOf('ins.mcqs.az') >= 0; });
     if (!globalImeiPage) {
-        const blank = pages.find(p => p.url() === 'about:blank' || p.url() === '');
+        var blank = pages.find(function(p) { return p.url() === 'about:blank' || p.url() === ''; });
         globalImeiPage = blank || await browser.newPage();
     }
-    if (!globalImeiPage.url().includes('ins.mcqs.az')) {
+    if (globalImeiPage.url().indexOf('ins.mcqs.az') < 0) {
         await globalImeiPage.goto('https://ins.mcqs.az/User/LogIn', { waitUntil: 'domcontentloaded' });
     }
-    try { await globalImeiPage.bringToFront(); } catch {}
+    try { await globalImeiPage.bringToFront(); } catch (e) {}
     return globalImeiPage;
 }
 
 // ── Scrape Job ───────────────────────────────────────────────
 async function runScrapeJob(body) {
-    const { fin, sv } = body;
+    var fin = body.fin;
+    var sv  = body.sv;
     if (!fin || !sv) throw new Error('FIN ve SV daxil edilmelidir');
-    
-    let formattedSv = sv.trim();
+
+    var formattedSv = sv.trim();
     if (formattedSv.toUpperCase().startsWith('AZE')) formattedSv = formattedSv.slice(3);
 
-    const page = await ensureEsocialPage();
-    if (page.url().includes('mygovid.gov.az') || page.url().includes('auth')) {
+    var page = await ensureEsocialPage();
+    if (page.url().indexOf('mygovid.gov.az') >= 0 || page.url().indexOf('auth') >= 0) {
         return { error: 'LOGIN_REQUIRED', message: 'Zehmet olmasa Asan Imza ile daxil olun.' };
     }
 
     // Modal cleaning
-    await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button,.q-btn,.btn,span,div,a'));
-        const close = buttons.find(el => {
-            const t = (el.innerText || '').trim();
+    await page.evaluate(function() {
+        var buttons = Array.from(document.querySelectorAll('button,.q-btn,.btn,span,div,a'));
+        var close = buttons.find(function(el) {
+            var t = (el.innerText || '').trim();
             return (t === 'Bağla' || t === 'BAĞLA' || t === 'Bağla.') && (el.offsetWidth > 0 || el.offsetHeight > 0);
         });
         if (close) close.click();
     });
 
     // Fill form
-    await page.evaluate((finVal, svVal) => {
-        const finInput = document.querySelector('input[placeholder*="FİN"]');
-        const svInput  = document.querySelector('input[placeholder*="ŞV"]');
+    await page.evaluate(function(finVal, svVal) {
+        var finInput = document.querySelector('input[placeholder*="FİN"]');
+        var svInput  = document.querySelector('input[placeholder*="ŞV"]');
         if (finInput) { finInput.value = finVal; finInput.dispatchEvent(new Event('input', { bubbles: true })); }
         if (svInput)  { svInput.value  = svVal;  svInput.dispatchEvent(new Event('input', { bubbles: true }));  }
-        
-        const btn = Array.from(document.querySelectorAll('button, .q-btn')).find(el => el.innerText?.includes('Axtar'));
+
+        var btn = Array.from(document.querySelectorAll('button, .q-btn')).find(function(el) {
+            return el.innerText && el.innerText.indexOf('Axtar') >= 0;
+        });
         if (btn) btn.click();
     }, fin, formattedSv);
 
-    // Wait result
-    await new Promise(r => setTimeout(r, 2000));
-    
-    const resultData = await page.evaluate(() => {
-        const data = {};
-        document.querySelectorAll('.q-field, .input-group, .row').forEach(container => {
-            const labelEl = container.querySelector('label, .q-field__label, .text-subtitle2');
+    await new Promise(function(r) { setTimeout(r, 2000); });
+
+    var resultData = await page.evaluate(function() {
+        var data = {};
+        document.querySelectorAll('.q-field, .input-group, .row').forEach(function(container) {
+            var labelEl = container.querySelector('label, .q-field__label, .text-subtitle2');
             if (!labelEl) return;
-            const label = labelEl.innerText.trim().toLowerCase();
-            const input = container.querySelector('input, .q-field__native');
+            var label = labelEl.innerText.trim().toLowerCase();
+            var input = container.querySelector('input, .q-field__native');
             if (input) data[label] = input.value || input.innerText;
         });
         return data;
@@ -245,48 +257,29 @@ async function runScrapeJob(body) {
     return { success: true, data: resultData };
 }
 
-// ── Job Retry Wrapper ───────────────────────────────────────
-async function handleJobWithRetry(jobType, payload, attempt = 1) {
-    try {
-        if (jobType === 'scrape')      return await runScrapeJob(payload);
-        if (jobType === 'check-imei') return await runImeiJob(payload);
-        throw new Error(`Namalum is tipi: ${jobType}`);
-    } catch (err) {
-        const isClosed = err.message.includes('Target closed') || err.message.includes('Protocol error');
-        if (isClosed && attempt === 1) {
-            console.log(`🔄 [${jobType}] Target closed/Protocol error. Yeniden cehd edilir...`);
-            // Reset references to force a fresh launch
-            if (jobType === 'scrape') { globalEsocialBrowser = null; globalEsocialPage = null; }
-            else { globalImeiBrowser = null; globalImeiPage = null; }
-            return await handleJobWithRetry(jobType, payload, 2);
-        }
-        throw err;
-    }
-}
-
 // ── IMEI Job ─────────────────────────────────────────────────
 async function runImeiJob(body) {
-    const { imei } = body;
+    var imei = body.imei;
     if (!imei) throw new Error('IMEI daxil edilmeyib');
 
-    const page = await ensureImeiPage();
-    
-    if (page.url().includes('LogIn')) {
+    var page = await ensureImeiPage();
+
+    if (page.url().indexOf('LogIn') >= 0) {
         await page.type('#username', 'aziza_nasirova');
         await page.type('#password', 'leqal2025');
         await page.click('#loginbutton');
-        await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(() => {});
+        await page.waitForNavigation({ waitUntil: 'networkidle2' }).catch(function() {});
     }
 
-    if (!page.url().includes('CheckImeiStatus')) {
+    if (page.url().indexOf('CheckImeiStatus') < 0) {
         await page.goto('https://ins.mcqs.az/CreditApplication/Index', { waitUntil: 'domcontentloaded' });
         await page.waitForSelector('li[data-url*="CheckImeiStatus"] a', { timeout: 10000 });
         await page.click('li[data-url*="CheckImeiStatus"] a');
     }
 
     await page.waitForSelector('#getimeicode', { timeout: 10000 });
-    await page.evaluate((val) => {
-        const el = document.querySelector('#getimeicode');
+    await page.evaluate(function(val) {
+        var el = document.querySelector('#getimeicode');
         if (el) {
             el.value = val;
             el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -295,15 +288,15 @@ async function runImeiJob(body) {
     }, imei);
 
     await page.click('#checkimeistatus');
-    
+
     try {
-        await page.waitForFunction(() => {
-            const el = document.querySelector('#imeiStatus b');
+        await page.waitForFunction(function() {
+            var el = document.querySelector('#imeiStatus b');
             return el && el.innerText.trim().length > 5;
         }, { timeout: 15000 });
-    } catch {}
+    } catch (e) {}
 
-    const statusText = await page.$eval('#imeiStatus b', el => el.innerText.trim()).catch(() => 'RESULT_NOT_FOUND');
+    var statusText = await page.$eval('#imeiStatus b', function(el) { return el.innerText.trim(); }).catch(function() { return 'RESULT_NOT_FOUND'; });
 
     return {
         imeiFee: statusText.endsWith('deaktiv olunub.'),
@@ -311,58 +304,155 @@ async function runImeiJob(body) {
     };
 }
 
-// ── Dispatcher ───────────────────────────────────────────────
+// ── Dispatcher + Retry ───────────────────────────────────────
 async function handleJob(jobType, payload) {
     if (jobType === 'scrape')      return runScrapeJob(payload);
     if (jobType === 'check-imei') return runImeiJob(payload);
     throw new Error('Namalum is tipi: ' + jobType);
 }
 
-// ── WebSocket ────────────────────────────────────────────────
-let ws = null;
-let reconnectTimer = null;
+async function handleJobWithRetry(jobType, payload, attempt) {
+    attempt = attempt || 1;
+    try {
+        return await handleJob(jobType, payload);
+    } catch (err) {
+        var isClosed = err.message.indexOf('Target closed') >= 0 || err.message.indexOf('Protocol error') >= 0;
+        if (isClosed && attempt === 1) {
+            console.log('[' + jobType + '] Target closed. Yeniden cehd...');
+            if (jobType === 'scrape') { globalEsocialBrowser = null; globalEsocialPage = null; }
+            else { globalImeiBrowser = null; globalImeiPage = null; }
+            return handleJobWithRetry(jobType, payload, 2);
+        }
+        throw err;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+// LOCAL HTTP SERVER — User oz PC-sinde localhost:3001 ile isleyir
+// Hec bir relay/agentLabel lazim deyil, birbasha yerli isleyir
+// ══════════════════════════════════════════════════════════════
+
+var localServer = http.createServer(function(req, res) {
+    // CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    // POST endpoints
+    if (req.method === 'POST') {
+        var body = '';
+        req.on('data', function(c) { body += c; });
+        req.on('end', function() {
+            var payload;
+            try { payload = JSON.parse(body); } catch (e) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Yanlish JSON' }));
+                return;
+            }
+
+            var jobType = null;
+            if (req.url === '/api/scrape') jobType = 'scrape';
+            else if (req.url === '/api/check-imei') jobType = 'check-imei';
+
+            if (!jobType) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Route tapilmadi: ' + req.url }));
+                return;
+            }
+
+            console.log('[LOCAL] Is alindi: ' + jobType);
+            handleJobWithRetry(jobType, payload).then(function(result) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+            }).catch(function(err) {
+                console.error('[LOCAL] Xeta: ' + err.message);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: err.message }));
+            });
+        });
+        return;
+    }
+
+    // GET endpoints
+    if (req.url === '/' || req.url === '/api/status') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            agent: AGENT_LABEL,
+            status: 'online',
+            relay: ws && ws.readyState === WebSocket.OPEN ? 'connected' : 'disconnected',
+            esocialBrowser: !!globalEsocialBrowser,
+            imeiBrowser: !!globalImeiBrowser
+        }));
+        return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Route tapilmadi' }));
+});
+
+localServer.listen(LOCAL_PORT, function() {
+    console.log('LOCAL SERVER: http://localhost:' + LOCAL_PORT);
+    console.log('   POST /api/scrape       - E-Social scrape');
+    console.log('   POST /api/check-imei   - IMEI yoxlama');
+    console.log('   GET  /api/status       - Agent durumu');
+});
+
+// ══════════════════════════════════════════════════════════════
+// WebSocket — Relay serverle baglanti (monitoring + uzaqdan is)
+// ══════════════════════════════════════════════════════════════
+var ws = null;
+var reconnectTimer = null;
 
 function connect() {
-    const wsUrl = RELAY_URL + '?secret=' + encodeURIComponent(AGENT_SECRET) + '&label=' + encodeURIComponent(AGENT_LABEL);
-    console.log('🔌 Relay servere qosulur: ' + RELAY_URL);
+    var wsUrl = RELAY_URL + '?secret=' + encodeURIComponent(AGENT_SECRET) + '&label=' + encodeURIComponent(AGENT_LABEL);
+    console.log('Relay servere qosulur: ' + RELAY_URL);
 
     ws = new WebSocket(wsUrl);
 
-    ws.on('open', () => {
-        console.log('✅ Relay servere qosuldu!');
+    ws.on('open', function() {
+        console.log('Relay servere qosuldu!');
         if (reconnectTimer) clearTimeout(reconnectTimer);
-        
-        setInterval(() => {
+        setInterval(function() {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
         }, 30000);
     });
 
-    ws.on('message', async (raw) => {
-        let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+    ws.on('message', function(raw) {
+        var msg;
+        try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
         if (msg.type === 'job') {
-            console.log(`📥 Is alindi: ${msg.jobType} [${msg.jobId}]`);
-            try {
-                const result = await handleJobWithRetry(msg.jobType, msg.payload);
+            console.log('[RELAY] Is alindi: ' + msg.jobType + ' [' + msg.jobId + ']');
+            handleJobWithRetry(msg.jobType, msg.payload).then(function(result) {
                 if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'job_result', jobId: msg.jobId, result }));
+                    ws.send(JSON.stringify({ type: 'job_result', jobId: msg.jobId, result: result }));
                 }
-            } catch (err) {
-                console.error(`❌ Is xetasi [${msg.jobId}]:`, err.message);
+            }).catch(function(err) {
+                console.error('[RELAY] Xeta [' + msg.jobId + ']: ' + err.message);
                 if (ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'job_result', jobId: msg.jobId, error: err.message }));
                 }
-            }
+            });
         }
     });
 
-    ws.on('close', () => {
-        console.log('⚠️ Baglanti kesildi. 5s sonra yeniden cehd...');
+    ws.on('close', function() {
+        console.log('Relay baglanti kesildi. 5s sonra yeniden cehd...');
         reconnectTimer = setTimeout(connect, 5000);
     });
 
-    ws.on('error', (err) => console.error('WebSocket xetasi:', err.message));
+    ws.on('error', function(err) { console.error('WebSocket xetasi: ' + err.message); });
 }
 
-console.log('🤖 E-SOCIAL AGENT BASLADI');
+// ── Start ─────────────────────────────────────────────────────
+console.log('');
+console.log('***************************************************');
+console.log('  E-SOCIAL LOCAL AGENT');
+console.log('  PC: ' + AGENT_LABEL);
+console.log('  Local: http://localhost:' + LOCAL_PORT);
+console.log('  Relay: ' + RELAY_URL);
+console.log('***************************************************');
+console.log('');
+
 connect();
-setInterval(() => {}, 1000);
+setInterval(function() {}, 1000);
