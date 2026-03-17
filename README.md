@@ -76,9 +76,12 @@ Content-Type: application/json
 ```json
 {
   "fin": "5XXXXXX",
-  "sv": "AZE12345678"
+  "sv": "AZE12345678",
+  "agentLabel": "Ofis-PC"
 }
 ```
+
+> **agentLabel** — userin PC-sinin adı (hostname). Bu parametr sorğunu həmin userin agentinə yönləndirir. Göndərilməzsə istənilən boş agentə gedir.
 
 **Uğurlu response:**
 ```json
@@ -126,7 +129,8 @@ Content-Type: application/json
 **Request body:**
 ```json
 {
-  "imei": "867493062290548"
+  "imei": "867493062290548",
+  "agentLabel": "Ofis-PC"
 }
 ```
 
@@ -200,11 +204,11 @@ git push origin main
 ## 📱 Frontend İnteqrasiya Nümunəsi
 
 ```javascript
-// E-Social sorğusu
+// E-Social sorğusu (agentLabel ilə userin öz agentinə yönləndirilir)
 const response = await fetch('https://scrape-production-5d7a.up.railway.app/api/scrape', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ fin: '5XXXXXX', sv: 'AZE12345678' })
+  body: JSON.stringify({ fin: '5XXXXXX', sv: 'AZE12345678', agentLabel: 'Ofis-PC' })
 });
 const data = await response.json();
 
@@ -212,7 +216,7 @@ const data = await response.json();
 const imeiRes = await fetch('https://scrape-production-5d7a.up.railway.app/api/check-imei', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ imei: '867493062290548' })
+  body: JSON.stringify({ imei: '867493062290548', agentLabel: 'Ofis-PC' })
 });
 const imeiData = await imeiRes.json();
 ```
