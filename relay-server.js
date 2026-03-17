@@ -51,20 +51,18 @@ const agents = new Map();
 const pendingJobs = new Map();
 
 // ── Helpers ─────────────────────────────────────────────────
-// ATOM\u0130K agent tap+rezerv funksiyası.
-// tap() + busy=true eyni sinxron blokda olur —
-// paralel sorğular eyni agenti əldə edə bilməz (JS single-thread).
-function tryClaimAgent() {
+// ATOMİK agent tap+rezerv. targetLabel varsa yalnız həmin agent seçilir.
+function tryClaimAgent(targetLabel) {
     for (const [agentId, agent] of agents) {
         if (!agent.busy && agent.ws.readyState === WebSocket.OPEN) {
-            agent.busy = true; // ← atom: tap + rezerv eyni addımda
+            if (targetLabel && agent.label !== targetLabel) continue;
+            agent.busy = true;
             return { agentId, agent };
         }
     }
     return null;
 }
 
-// Yalnız status üçün (busy=true etmir)
 function getAvailableAgentCount() {
     let count = 0;
     for (const [, agent] of agents) {
@@ -73,27 +71,27 @@ function getAvailableAgentCount() {
     return count;
 }
 
-async function sendJobToAgent(jobType, payload) {
-    // 1. Dərhal atomik əldə cəhdi
-    let claimed = tryClaimAgent();
+async function sendJobToAgent(jobType, payload, targetLabel) {
+    let claimed = tryClaimAgent(targetLabel);
 
-    // 2. Boş agent yoxdursa — 15s gözlə, hər 300ms-də atomik yoxla
     if (!claimed) {
-        console.log(`⏳ [${jobType}] Boş agent yoxdur (${agents.size} agent, gözlənilir...)`);
-
+        const msg = targetLabel
+            ? `⏳ [${jobType}] Agent "${targetLabel}" boş deyil/tapılmadı...`
+            : `⏳ [${jobType}] Boş agent yoxdur (${agents.size}), gözlənilir...`;
+        console.log(msg);
         const deadline = Date.now() + 15_000;
         while (Date.now() < deadline) {
             await new Promise(r => setTimeout(r, 300));
-            claimed = tryClaimAgent(); // hər dəfə atomik
+            claimed = tryClaimAgent(targetLabel);
             if (claimed) break;
         }
     }
 
     if (!claimed) {
-        const boş = getAvailableAgentCount();
         const err = new Error(
-            `NO_AGENT: Aktiv lokal agent tapılmadı (${agents.size} agent qoşuludur, ${boş} boşdur). ` +
-            'Zəhmət olmasa kompüterdə "node agent.js" işlədilsin.'
+            targetLabel
+                ? `NO_AGENT: "${targetLabel}" agenti tapılmadı/məşğuldur.`
+                : `NO_AGENT: Heç bir agent tapılmadı (${agents.size} qoşulu).`
         );
         err.code = 503;
         return Promise.reject(err);
@@ -361,20 +359,22 @@ require(path.join(DIR, 'launcher.js'));
     res.type('application/javascript').send(script);
 });
 
-// E-Social scrape
+// E-Social scrape — agentLabel ilə userin öz agentine yönləndirilir
 app.post('/api/scrape', async (req, res) => {
     try {
-        const result = await sendJobToAgent('scrape', req.body);
+        const { agentLabel, ...payload } = req.body;
+        const result = await sendJobToAgent('scrape', payload, agentLabel);
         res.json(result);
     } catch (err) {
         res.status(err.code || 500).json({ error: err.message });
     }
 });
 
-// IMEI check — lokal agent-ə yönləndirilir (sertifikat lazımdır)
+// IMEI check — agentLabel ilə userin öz agentine yönləndirilir
 app.post('/api/check-imei', async (req, res) => {
     try {
-        const result = await sendJobToAgent('check-imei', req.body);
+        const { agentLabel, ...payload } = req.body;
+        const result = await sendJobToAgent('check-imei', payload, agentLabel);
         res.json(result);
     } catch (err) {
         res.status(err.code || 500).json({ error: err.message });
