@@ -333,16 +333,26 @@ https.get(agentUrl, { rejectUnauthorized: false }, (res) => {
 fs.writeFileSync(path.join(DIR, 'launcher.js'), launcherCode.trim());
 console.log('  [OK] launcher.js yaradildi');
 
-// 6. Windows Scheduled Task — hər login-də avtomatik başlasın
+// 6. Windows Startup folder — hər login-də avtomatik başlasın
+// schtasks əvəzinə Startup folder — admin lazım deyil, HƏR yerdə işləyir
 try {
     const launcherPath = path.join(DIR, 'launcher.js');
+    const cmdContent = '@echo off\\r\\ncd /d "' + DIR + '"\\r\\nnode "' + launcherPath + '"\\r\\n';
+    
+    // .cmd faylı bot qovluğunda yarat
     const cmdPath = path.join(DIR, 'start-agent.cmd');
-    fs.writeFileSync(cmdPath, '@echo off\\r\\ncd /d "' + DIR + '"\\r\\nnode "' + launcherPath + '"\\r\\n');
-    execSync('schtasks /create /tn "ESocialBot" /tr "\\"' + cmdPath + '\\"" /sc onlogon /f /rl limited', { stdio: 'pipe' });
-    console.log('  [OK] Scheduled Task yaradildi (her login-de avtomatik)');
+    fs.writeFileSync(cmdPath, cmdContent);
+    
+    // Startup folder-ə kopyala — PC açılanda avtomatik başlayacaq
+    const startupDir = path.join(os.homedir(), 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+    const startupCmd = path.join(startupDir, 'ESocialBot.cmd');
+    fs.writeFileSync(startupCmd, cmdContent);
+    
+    console.log('  [OK] Startup-a elave edildi (her login-de avtomatik)');
+    console.log('  [OK] Yol: ' + startupCmd);
 } catch (e) {
-    console.log('  [!] Scheduled Task yaradila bilmedi:', e.message);
-    console.log('  [!] Agent manual baslada bilersiniz: node "' + path.join(DIR, 'launcher.js') + '"');
+    console.log('  [!] Startup-a elave edile bilmedi:', e.message);
+    console.log('  [!] Manual basladin: cd %LOCALAPPDATA%\\\\ESocialBot && node launcher.js');
 }
 
 console.log('');
