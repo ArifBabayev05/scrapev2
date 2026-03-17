@@ -66,8 +66,27 @@ const getChromePath = () => {
 // Chrome default profili (istifadəçinin açıq Chrome-u) istifadə edir!
 const getBaseDir = () => {
     const home = require('os').homedir();
-    return path.join(home, 'AppData', 'Local', 'BotChromeProfiles');
+    return path.join(home, 'AppData', 'Local', 'ESocialBot'); // Bot qovluğunda saxla
 };
+
+// ── Single Instance Lock ─────────────────────────────────────
+const lockFile = path.join(getBaseDir(), 'agent.lock');
+const checkSingleInstance = () => {
+    if (!fs.existsSync(getBaseDir())) fs.mkdirSync(getBaseDir(), { recursive: true });
+    if (fs.existsSync(lockFile)) {
+        try {
+            const pid = parseInt(fs.readFileSync(lockFile, 'utf8'));
+            process.kill(pid, 0); // PID varmı yoxla
+            console.error(`⚠️ Agenti artıq başqa bir pəncərədə işləyir (PID: ${pid}). Bu instansiya bağlanır.`);
+            process.exit(0);
+        } catch {
+            fs.unlinkSync(lockFile); // Köhnə pid ölüdürsə faylı sil
+        }
+    }
+    fs.writeFileSync(lockFile, process.pid.toString());
+    process.on('exit', () => { try { fs.unlinkSync(lockFile); } catch {} });
+};
+checkSingleInstance();
 
 const ensureDir = (dir) => {
     try {
@@ -97,40 +116,44 @@ const cleanSingletonFiles = (profilePath) => {
 // Əvvəlcə artıq açıq olan Edge-ə qoşulmağa cəhd edir (agent restart halı).
 // Tapılmasa puppeteer.launch() ilə yeni Edge açır — görünən, real pəncərə.
 async function connectOrLaunchEdge({ executablePath, userDataDir, debugPort, profilePath }) {
-    // Adım 1: Mövcud Edge instansına qoşulmağa cəhd et (agent restart halı)
+    // Portu yoxla - əgər nəsə dinləyirsə qoşul
     try {
-        console.log(`🔌 Mövcud Edge-ə qoşulur (port ${debugPort})...`);
         const browser = await puppeteer.connect({
             browserURL: `http://localhost:${debugPort}`,
             defaultViewport: null,
         });
         console.log(`✅ Mövcud Edge-ə qoşuldu (port ${debugPort})`);
         return browser;
-    } catch {
-        console.log(`ℹ️ Port ${debugPort}-də Edge tapılmadı, yeni instans açılır...`);
+    } catch {}
+
+    // Əgər portda heç kim yoxdursa, amma yenə də msedge.exe varsa (zombi), onu təmizlə
+    if (process.platform === 'win32') {
+        try {
+            const { execSync } = require('child_process');
+            // Yalnız bizim profil qovluğunu istifadə edən Edge-ləri bağla
+            execSync(`taskkill /F /IM msedge.exe /FI "WINDOWTITLE eq *BotChrome*" /T`, { stdio: 'ignore' });
+        } catch {}
     }
 
-    // Adım 2: Stale lock faylları təmizlə
     cleanSingletonFiles(profilePath);
 
-    // Adım 3: puppeteer.launch() — ən etibarlı yol
-    console.log(`🚀 Edge açılır (puppeteer.launch, port ${debugPort})...`);
+    console.log(`🚀 Yeni Edge pəncərəsi açılır (port ${debugPort})...`);
     const browser = await puppeteer.launch({
         executablePath,
-        headless: false,      // Görünən pəncərə — user sertifikat seçə bilsin
-        defaultViewport: null, // Tam ekran
+        headless: false,
+        defaultViewport: null,
         userDataDir,
         args: [
             `--remote-debugging-port=${debugPort}`,
+            '--window-name=BotChrome', // taskkill üçün
             '--no-first-run',
             '--no-default-browser-check',
             '--disable-blink-features=AutomationControlled',
             '--disable-infobars',
             '--start-maximized',
         ],
-        ignoreDefaultArgs: ['--enable-automation'],  // "Chrome is being controlled" mesajını gizlə
+        ignoreDefaultArgs: ['--enable-automation'],
     });
-    console.log(`✅ Edge açıldı və hazırdır (port ${debugPort})`);
     return browser;
 }
 
@@ -213,6 +236,7 @@ async function ensureEsocialPage() {
             await globalEsocialPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
         }
 
+        try { await globalEsocialPage.bringToFront(); } catch {}
         globalEsocialPage.on('close', () => { globalEsocialPage = null; });
         return globalEsocialPage;
     } catch (err) {
@@ -257,6 +281,7 @@ async function ensureImeiPage() {
             await globalImeiPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
         }
 
+        try { await globalImeiPage.bringToFront(); } catch {}
         globalImeiPage.on('close', () => { globalImeiPage = null; });
         return globalImeiPage;
     } catch (err) {

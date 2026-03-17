@@ -271,8 +271,7 @@ if (!fs.existsSync(envFile)) {
         'RELAY_URL=wss://' + RELAY_HOST,
         'AGENT_SECRET=bot-secret-2024',
         'AGENT_LABEL=' + os.hostname(),
-        'ESOCIAL_DEBUG_PORT=9222',
-        'IMEI_DEBUG_PORT=9223',
+        'DEBUG_PORT=9222',
     ].join('\\n') + '\\n');
     console.log('  [OK] .env yaradildi (agent:', os.hostname() + ')');
 } else {
