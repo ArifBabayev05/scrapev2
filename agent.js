@@ -117,38 +117,74 @@ async function ensureEsocialPage() {
             if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
 
             const profilePath = path.join(getBaseDir(), 'esocial_profile');
-            ensureDir(profilePath);      // admin icazəsi lazım olmayır (AppData)
-            cleanSingletonFiles(profilePath); // YALNIZ lock faylları
+            ensureDir(profilePath);
 
-            globalBrowser = await puppeteer.launch({
-                headless: false,
-                executablePath: chromePath,
-                defaultViewport: null,
-                pipe: false,
-                handleSIGINT: false,
-                handleSIGTERM: false,
-                handleSIGHUP: false,
-                ignoreDefaultArgs: ['--enable-automation'],
-                args: [
-                    '--test-type',
-                    '--start-maximized',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--no-first-run',
-                    '--no-default-browser-check',
-                    '--disable-extensions',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-gpu',
-                    '--disable-dev-shm-usage',
-                    '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-renderer-backgrounding',
-                    '--disable-infobars',
-                    '--disable-features=TranslateUI',
-                    targetUrl
-                ],
-                userDataDir: profilePath
-            });
+            // İlk cəhd — singleton təmizləmədən aç
+            try {
+                globalBrowser = await puppeteer.launch({
+                    headless: false,
+                    executablePath: chromePath,
+                    defaultViewport: null,
+                    pipe: false,
+                    handleSIGINT: false,
+                    handleSIGTERM: false,
+                    handleSIGHUP: false,
+                    ignoreDefaultArgs: ['--enable-automation'],
+                    args: [
+                        '--test-type',
+                        '--start-maximized',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--no-first-run',
+                        '--no-default-browser-check',
+                        '--disable-extensions',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-gpu',
+                        '--disable-dev-shm-usage',
+                        '--disable-background-timer-throttling',
+                        '--disable-backgrounding-occluded-windows',
+                        '--disable-renderer-backgrounding',
+                        '--disable-infobars',
+                        '--disable-features=TranslateUI',
+                        targetUrl
+                    ],
+                    userDataDir: profilePath
+                });
+            } catch (launchErr) {
+                // Stale lock fayllar varsa, təmizləyərək yenidən cəhd et
+                console.log('⚠️ [E-Social] 1ci cəhd uğursuz, singleton fayllar sıfırlanır...');
+                cleanSingletonFiles(profilePath);
+                await new Promise(r => setTimeout(r, 1500));
+                globalBrowser = await puppeteer.launch({
+                    headless: false,
+                    executablePath: chromePath,
+                    defaultViewport: null,
+                    pipe: false,
+                    handleSIGINT: false,
+                    handleSIGTERM: false,
+                    handleSIGHUP: false,
+                    ignoreDefaultArgs: ['--enable-automation'],
+                    args: [
+                        '--test-type',
+                        '--start-maximized',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--no-first-run',
+                        '--no-default-browser-check',
+                        '--disable-extensions',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-gpu',
+                        '--disable-dev-shm-usage',
+                        '--disable-background-timer-throttling',
+                        '--disable-backgrounding-occluded-windows',
+                        '--disable-renderer-backgrounding',
+                        '--disable-infobars',
+                        '--disable-features=TranslateUI',
+                        targetUrl
+                    ],
+                    userDataDir: profilePath
+                });
+            }
         }
 
         // İlk tab-ı götür (brauzer targetUrl ilə açılır)
@@ -217,33 +253,63 @@ async function ensureImeiPage() {
             if (!chromePath) throw new Error('Chrome tapılmadı. Google Chrome quraşdırın.');
 
             const profilePath = path.join(getBaseDir(), 'imei_profile');
-            ensureDir(profilePath);      // admin icazəsi lazım olmayır (AppData)
-            cleanSingletonFiles(profilePath); // YALNIZ lock faylları
+            ensureDir(profilePath);
 
-            imeiBrowser = await puppeteer.launch({
-                headless: false,
-                executablePath: chromePath,
-                defaultViewport: null,
-                ignoreDefaultArgs: ['--enable-automation'],
-                args: [
-                    '--test-type',
-                    '--start-maximized',
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--no-first-run',
-                    '--no-default-browser-check',
-                    '--disable-extensions',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-gpu',
-                    '--disable-dev-shm-usage',
-                    '--disable-infobars',
-                    '--disable-features=TranslateUI',
-                    '--password-store=basic',
-                    '--use-mock-keychain',
-                    'https://ins.mcqs.az/User/LogIn'
-                ],
-                userDataDir: profilePath
-            });
+            // İlk cəhd — singleton təmizləmədən aç
+            try {
+                imeiBrowser = await puppeteer.launch({
+                    headless: false,
+                    executablePath: chromePath,
+                    defaultViewport: null,
+                    ignoreDefaultArgs: ['--enable-automation'],
+                    args: [
+                        '--test-type',
+                        '--start-maximized',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--no-first-run',
+                        '--no-default-browser-check',
+                        '--disable-extensions',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-gpu',
+                        '--disable-dev-shm-usage',
+                        '--disable-infobars',
+                        '--disable-features=TranslateUI',
+                        '--password-store=basic',
+                        '--use-mock-keychain',
+                        'https://ins.mcqs.az/User/LogIn'
+                    ],
+                    userDataDir: profilePath
+                });
+            } catch (launchErr) {
+                console.log('⚠️ [IMEI] 1ci cəhd uğursuz, singleton fayllar sıfırlanır...');
+                cleanSingletonFiles(profilePath);
+                await new Promise(r => setTimeout(r, 1500));
+                imeiBrowser = await puppeteer.launch({
+                    headless: false,
+                    executablePath: chromePath,
+                    defaultViewport: null,
+                    ignoreDefaultArgs: ['--enable-automation'],
+                    args: [
+                        '--test-type',
+                        '--start-maximized',
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--no-first-run',
+                        '--no-default-browser-check',
+                        '--disable-extensions',
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-gpu',
+                        '--disable-dev-shm-usage',
+                        '--disable-infobars',
+                        '--disable-features=TranslateUI',
+                        '--password-store=basic',
+                        '--use-mock-keychain',
+                        'https://ins.mcqs.az/User/LogIn'
+                    ],
+                    userDataDir: profilePath
+                });
+            }
         }
 
         // İlk tab-ı götür (brauzer Login URL ilə açılır)
@@ -499,6 +565,30 @@ function connect() {
                 try { ws.send(JSON.stringify({ type: 'ping' })); } catch {}
             }
         }, 30_000);
+
+        // ══ Əvvəlcədən brauzerləri başlat ══
+        // Relay-ə qoşulduqdan 3 saniyə sonra hər iki Chrome-u aç.
+        // Bu səbəbdən ilk API sorğusu gələndə artıq hazır olur,
+        // soyuq başlatma mövcud Chrome pencərələrinə toxunmur.
+        setTimeout(() => {
+            console.log('🔄 Brauzerlər əvvəlcədən başladılır...');
+            ensureEsocialPage()
+                .then(p => p
+                    ? console.log('✅ [E-Social] Brauzer hazırdır — ilk API sorğusu anında cavablanacaq')
+                    : console.log('⚠️ [E-Social] Brauzer hazırlanırken problem oldu')
+                )
+                .catch(e => console.error('❌ [E-Social] ƍn-başlatma xətası:', e.message));
+
+            // IMEI brauzeri 5 saniyə sonra başlat (eyni anda 2 Chrome açılmasın)
+            setTimeout(() => {
+                ensureImeiPage()
+                    .then(p => p
+                        ? console.log('✅ [IMEI] Brauzer hazırdır — ilk API sorğusu anında cavablanacaq')
+                        : console.log('⚠️ [IMEI] Brauzer hazırlanırken problem oldu')
+                    )
+                    .catch(e => console.error('❌ [IMEI] ƍn-başlatma xətası:', e.message));
+            }, 5000); // E-Social-dan 5s sonra
+        }, 3000); // Relay-ə qoşulduqdan 3s sonra
     });
 
     ws.on('message', async (raw) => {
