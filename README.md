@@ -1,26 +1,61 @@
-# E-Social Bot — API Docs
+# E-Social Bot — API Docs & Quraşdırma
 
 ## 🏗️ Arxitektura
 
 ```
-                    ┌─────────────────────────┐
-  Web Tətbiq  ───→  │  Railway Relay Server    │
-  (HTTP POST)       │  relay-server.js         │
-                    └───────────┬─────────────┘
-                                │ WebSocket
-                    ┌───────────┴─────────────┐
-                    │  Lokal Agent (user PC)    │
-                    │  agent.js                 │
-                    │  ├── Edge (E-Social tab)  │
-                    │  └── Edge (IMEI tab)      │
-                    └──────────────────────────┘
+  Web Tətbiq ─── HTTP POST ──→  Railway Relay Server
+                                   │
+                              WebSocket bağlantı
+                                   │
+                         ┌─────────┴──────────┐
+                     Agent-1 (PC-1)     Agent-2 (PC-2)  ...  Agent-N
+                     Edge brauzer       Edge brauzer
 ```
+
+**Hər userin öz PC-sində agent işləyir.** API request-ə `agentLabel` əlavə edərək sorğu konkret userin agentinə yönləndirilir.
 
 ---
 
-## 📋 API Endpoints
+## 📋 Bütün API Endpoints
 
 **Base URL:** `https://scrape-production-5d7a.up.railway.app`
+
+| Metod | Endpoint | Təsvir |
+|-------|----------|--------|
+| `GET` | `/` | Health check |
+| `GET` | `/api/status` | Qoşulu agentlər siyahısı |
+| `GET` | `/api/setup-command` | Quraşdırma komutunu qaytarır (copy-paste) |
+| `GET` | `/api/install` | Agent quraşdırma script-i (node ilə işlədilir) |
+| `GET` | `/api/agent-code` | Ən son agent.js kodunu qaytarır |
+| `POST` | `/api/scrape` | E-Social əmək müqaviləsi sorğusu |
+| `POST` | `/api/check-imei` | IMEI yoxlama |
+
+---
+
+## 🖥️ Agent Quraşdırması (User üçün — BİR DƏFƏ)
+
+**Tələb:** Node.js quraşdırılmalıdır → [nodejs.org](https://nodejs.org)
+
+User **cmd** açıb bu komutu yapışdırır:
+
+```
+node -e "fetch('https://scrape-production-5d7a.up.railway.app/api/install').then(r=>r.text()).then(s=>{require('fs').writeFileSync(require('os').tmpdir()+'/s.js',s);require(require('os').tmpdir()+'/s.js')})"
+```
+
+> 💡 Bu komutu brauzerdən həmişə almaq olar: [/api/setup-command](https://scrape-production-5d7a.up.railway.app/api/setup-command)
+
+**Bu komut avtomatik:**
+1. `%LOCALAPPDATA%\ESocialBot` qovluğu yaradır
+2. Paketləri yükləyir (ws, puppeteer-core, dotenv)
+3. Agent kodunu Railway-dən yükləyir
+4. Windows Startup-a əlavə edir (hər login-də avtomatik)
+5. Edge açır — user sertifikatla 1 dəfə login olur
+
+**Sonra heç nə etmək lazım deyil — PC açılanda agent avtomatik başlayır.**
+
+---
+
+## 📡 API İstifadəsi
 
 ### 1. Health Check
 
@@ -28,51 +63,40 @@
 GET /
 ```
 
-**Response:**
 ```json
 {
   "service": "E-Social Bot Relay Server",
   "status": "online",
-  "agents": 1,
+  "agents": 2,
   "pendingJobs": 0,
   "uptime": "3600s"
 }
 ```
 
----
-
-### 2. Agent Status
+### 2. Qoşulu Agentlər
 
 ```http
 GET /api/status
 ```
 
-**Response:**
 ```json
 {
   "agents": [
-    {
-      "id": "41eb3554",
-      "label": "Ofis-PC",
-      "busy": false,
-      "connectedAt": "2026-03-17T06:30:00.000Z",
-      "wsState": 1
-    }
+    { "id": "e9512533", "label": "Ofis-PC", "busy": false },
+    { "id": "7cde5835", "label": "MURADB-DATA", "busy": false }
   ],
   "pendingJobs": 0
 }
 ```
 
----
-
-### 3. E-Social Əmək Müqaviləsi Sorğusu
+### 3. E-Social Sorğusu
 
 ```http
 POST /api/scrape
 Content-Type: application/json
 ```
 
-**Request body:**
+**Request:**
 ```json
 {
   "fin": "5XXXXXX",
@@ -81,9 +105,9 @@ Content-Type: application/json
 }
 ```
 
-> **agentLabel** — userin PC-sinin adı (hostname). Bu parametr sorğunu həmin userin agentinə yönləndirir. Göndərilməzsə istənilən boş agentə gedir.
+> `agentLabel` — userin PC-sinin adı (hostname). Göndərilməzsə random boş agentə gedir.
 
-**Uğurlu response:**
+**Response (uğurlu):**
 ```json
 {
   "data": {
@@ -91,16 +115,12 @@ Content-Type: application/json
     "gender": "Kişi",
     "birthDate": "01.01.1990",
     "address": "Bakı şəhəri ...",
-    "actualAddress": "...",
-    "passportSeries": "AZE12345678",
-    "passportNumber": "...",
-    "issueDate": "01.01.2020",
-    "authority": "..."
+    "passportSeries": "AZE12345678"
   }
 }
 ```
 
-**Login lazım olanda:**
+**Response (login lazım):**
 ```json
 {
   "data": {
@@ -110,15 +130,6 @@ Content-Type: application/json
 }
 ```
 
-**Agent tapılmadıqda (503):**
-```json
-{
-  "error": "NO_AGENT: Aktiv lokal agent tapılmadı..."
-}
-```
-
----
-
 ### 4. IMEI Yoxlama
 
 ```http
@@ -126,7 +137,7 @@ POST /api/check-imei
 Content-Type: application/json
 ```
 
-**Request body:**
+**Request:**
 ```json
 {
   "imei": "867493062290548",
@@ -134,92 +145,81 @@ Content-Type: application/json
 }
 ```
 
-**Uğurlu response:**
-```json
-{
-  "imeiFee": true,
-  "message": "867493062290548 IMEI kodlu cihaz deaktiv olunub."
-}
-```
-
+**Response:**
 ```json
 {
   "imeiFee": false,
-  "message": "867493062290548 IMEI kodlu cihaz aktivdir."
+  "message": "Daxil etdiyiniz IMEI nömrə Beynəlxalq GSM Assosiasiyası tərəfindən təyin olunmuş qaydalara uyğun deyil."
 }
 ```
 
----
+### 5. Quraşdırma Komutu
 
-## 🖥️ User Quraşdırma (Bir dəfəlik)
-
-**Tələblər:** Node.js quraşdırılmalıdır (nodejs.org)
-
-User **bir dəfə** bu komutu terminalda (cmd/powershell) işlədir:
-
-```
-node -e "fetch('https://scrape-production-5d7a.up.railway.app/api/install').then(r=>r.text()).then(s=>{require('fs').writeFileSync(require('os').tmpdir()+'/s.js',s);require(require('os').tmpdir()+'/s.js')})"
+```http
+GET /api/setup-command
 ```
 
-**Bu komut avtomatik olaraq:**
-1. `%LOCALAPPDATA%\ESocialBot` qovluğu yaradır
-2. Lazımi paketləri yükləyir (ws, puppeteer-core, dotenv)
-3. Agent kodunu Railway-dən yükləyir
-4. Windows Scheduled Task yaradır (hər login-də avtomatik başlayır)
-5. Edge brauzeri açır
+**Response (plain text):**
+```
+node -e "fetch('https://scrape-production-5d7a.up.railway.app/api/install')..."
+```
 
-**İlk dəfə user manual etməli:**
-- E-Social Edge pəncərəsində Asan İmza sertifikatını seçir
-- IMEI Edge pəncərəsində sertifikat seçib login olur (aziza_nasirova / leqal2025)
-
-Bundan sonra API sorğuları avtomatik işləyir.
+Bu komutu userin cmd-sinə copy-paste etmək üçün istifadə edin.
 
 ---
 
-## 🔄 Güncəlləmə
+## 📱 Frontend İnteqrasiya
 
-Agent kodu **həmişə Railway-dən yüklənir** — dəyişiklik etdikdə:
+```javascript
+const BASE = 'https://scrape-production-5d7a.up.railway.app';
+
+// E-Social sorğusu
+const scrapeRes = await fetch(`${BASE}/api/scrape`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    fin: '5XXXXXX',
+    sv: 'AZE12345678',
+    agentLabel: 'Ofis-PC'  // userin PC adı
+  })
+});
+const scrapeData = await scrapeRes.json();
+
+// IMEI yoxlama
+const imeiRes = await fetch(`${BASE}/api/check-imei`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    imei: '867493062290548',
+    agentLabel: 'Ofis-PC'
+  })
+});
+const imeiData = await imeiRes.json();
+```
+
+---
+
+## 🔄 Kod Güncəlləmə
+
+Agent kodu **həmişə Railway-dən yüklənir:**
 
 ```bash
-# Kodu dəyişdir, push et
 git add agent.js
 git commit -m "fix: ..."
 git push origin main
 ```
 
-**20 user-in hamısı növbəti restart-da avtomatik güncəllənir.** Heç bir manual müdaxilə lazım deyil.
+**Bütün agentlər növbəti restart-da avtomatik güncəllənir.** Manual müdaxilə lazım deyil.
 
 ---
 
 ## ⚙️ Railway Environment Variables
 
-| Dəyişən | Dəyər | Məcburi |
-|---------|-------|---------|
-| `AGENT_SECRET` | `bot-secret-2024` | ✅ |
-| `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` | `true` | ✅ |
-| `PUPPETEER_SKIP_DOWNLOAD` | `true` | ✅ |
-
----
-
-## 📱 Frontend İnteqrasiya Nümunəsi
-
-```javascript
-// E-Social sorğusu (agentLabel ilə userin öz agentinə yönləndirilir)
-const response = await fetch('https://scrape-production-5d7a.up.railway.app/api/scrape', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ fin: '5XXXXXX', sv: 'AZE12345678', agentLabel: 'Ofis-PC' })
-});
-const data = await response.json();
-
-// IMEI yoxlama
-const imeiRes = await fetch('https://scrape-production-5d7a.up.railway.app/api/check-imei', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ imei: '867493062290548', agentLabel: 'Ofis-PC' })
-});
-const imeiData = await imeiRes.json();
-```
+| Dəyişən | Dəyər |
+|---------|-------|
+| `AGENT_SECRET` | `bot-secret-2024` |
+| `PUPPETEER_SKIP_CHROMIUM_DOWNLOAD` | `true` |
+| `PUPPETEER_SKIP_DOWNLOAD` | `true` |
 
 ---
 
@@ -227,8 +227,9 @@ const imeiData = await imeiRes.json();
 
 | Problem | Həll |
 |---------|------|
-| `NO_AGENT` xətası | User-in PC-sində agent işləmir. `node -e "fetch..."` komutunu yenidən işlədin. |
+| `NO_AGENT` xətası | User-in PC-sində agent işləmir. Install komutunu yenidən işlədin. |
+| `"XYZ" agenti tapılmadı` | `agentLabel` yoxlayın — `/api/status` ilə qoşulu agentləri görün |
 | `LOGIN_REQUIRED` | Edge-də Asan İmza ilə login olun |
 | `TIMEOUT` | Sayt cavab vermir, yenidən cəhd edin |
-| Edge açılmır | Taskbar-da Edge ikonuna baxın, manual açın |
-| Dublikat tablar | Agent-i restart edin |
+| Edge açılmır | `cd %LOCALAPPDATA%\ESocialBot && node launcher.js` işlədin |
+| PC açılanda agent başlamır | Install komutunu yenidən işlədin (Startup-a əlavə olunacaq) |

