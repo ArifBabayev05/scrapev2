@@ -59,7 +59,7 @@ const checkSingleInstance = () => {
         try {
             const pid = parseInt(fs.readFileSync(lockFile, 'utf8'));
             process.kill(pid, 0); 
-            console.error(`⚠️ Agent artiq basqa pencederede isleyir (PID: \${pid}).`);
+            console.error('⚠️ Agent artiq basqa pencederede isleyir (PID: ' + pid + ').');
             process.exit(0);
         } catch {
             fs.unlinkSync(lockFile);
@@ -111,9 +111,9 @@ async function ensureBrowser(service) {
     try {
         // Try connect first
         try {
-            browser = await puppeteer.connect({ browserURL: `http://localhost:\${port}`, defaultViewport: null });
+            browser = await puppeteer.connect({ browserURL: 'http://localhost:' + port, defaultViewport: null });
             if (isEsocial) globalEsocialBrowser = browser; else globalImeiBrowser = browser;
-            console.log(`✅ [\${service}] Movcud brauzere qosuldu (Port: \${port})`);
+            console.log('✅ [' + service + '] Movcud brauzere qosuldu (Port: ' + port + ')');
             return browser;
         } catch {}
 
@@ -129,7 +129,7 @@ async function ensureBrowser(service) {
             defaultViewport: null,
             userDataDir,
             args: [
-                `--remote-debugging-port=\${port}`,
+                '--remote-debugging-port=' + port,
                 '--no-first-run',
                 '--no-default-browser-check',
                 '--disable-blink-features=AutomationControlled',
@@ -315,7 +315,7 @@ async function runImeiJob(body) {
 async function handleJob(jobType, payload) {
     if (jobType === 'scrape')      return runScrapeJob(payload);
     if (jobType === 'check-imei') return runImeiJob(payload);
-    throw new Error(`Namalum is tipi: \${jobType}`);
+    throw new Error('Namalum is tipi: ' + jobType);
 }
 
 // ── WebSocket ────────────────────────────────────────────────
@@ -323,8 +323,8 @@ let ws = null;
 let reconnectTimer = null;
 
 function connect() {
-    const wsUrl = `\${RELAY_URL}?secret=\${encodeURIComponent(AGENT_SECRET)}&label=\${encodeURIComponent(AGENT_LABEL)}`;
-    console.log(`🔌 Relay servere qosulur: \${RELAY_URL}`);
+    const wsUrl = RELAY_URL + '?secret=' + encodeURIComponent(AGENT_SECRET) + '&label=' + encodeURIComponent(AGENT_LABEL);
+    console.log('🔌 Relay servere qosulur: ' + RELAY_URL);
 
     ws = new WebSocket(wsUrl);
 
