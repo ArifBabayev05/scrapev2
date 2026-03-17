@@ -22,8 +22,7 @@ const os                        = require('os');
 const RELAY_URL           = (process.env.RELAY_URL    || 'ws://localhost:3000').replace(/\/$/, '');
 const AGENT_SECRET        = process.env.AGENT_SECRET  || 'bot-secret-2024';
 const AGENT_LABEL         = process.env.AGENT_LABEL   || require('os').hostname();
-const ESOCIAL_DEBUG_PORT  = parseInt(process.env.ESOCIAL_DEBUG_PORT || '9222');
-const IMEI_DEBUG_PORT     = parseInt(process.env.IMEI_DEBUG_PORT    || '9223');
+const DEBUG_PORT          = parseInt(process.env.DEBUG_PORT || '9222');
 
 // ── Chrome path ──────────────────────────────────────────────
 // Edge — Windows 10/11-də həmişə quraşdırılmış gəlir.
@@ -138,209 +137,131 @@ async function connectOrLaunchEdge({ executablePath, userDataDir, debugPort, pro
 
 let globalBrowser    = null;
 let globalEsocialPage = null;   // E-Social üçün sabit tab
-let isLaunching      = false;
-let imeiBrowser      = null;
-let globalImeiPage   = null;    // IMEI üçün sabit tab
-let isImeiLaunching  = false;
+let globalImeiPage    = null;   // IMEI üçün sabit tab
+let isLaunching       = false;
 
-
-// ── E-Social Browser ─────────────────────────────────────────
-// Brauzer + persistent tab qaytarır.
-// Tab yalnız 1 dəfə açılır; sonrakı çağırışlar mövcud tab-ı istifadə edir.
-async function ensureEsocialPage() {
-    // Mövcud page-i yoxla
-    if (globalEsocialPage) {
-        try {
-            await globalEsocialPage.evaluate(() => document.title); // crash test
-            return globalEsocialPage;
-        } catch {
-            console.log('⚠️ [E-Social] Köhnə tab bağlanıb, yenisi açılır...');
-            globalEsocialPage = null;
-            globalBrowser     = null;
-        }
-    }
-
-    // Browser yoxlanışı
-    if (globalBrowser) {
-        try { await globalBrowser.version(); }
-        catch { globalBrowser = null; }
-    }
-
+// ── ensureBrowser ────────────────────────────────────────────
+async function ensureBrowser() {
     if (isLaunching) {
-        for (let i = 0; i < 30; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            if (globalEsocialPage) return globalEsocialPage;
+        for (let i = 0; i < 20; i++) {
+            await new Promise(r => setTimeout(r, 1000));
+            if (globalBrowser) return globalBrowser;
         }
-        return null;
+    }
+
+    if (globalBrowser) {
+        try {
+            await globalBrowser.version();
+            return globalBrowser;
+        } catch {
+            globalBrowser = null;
+        }
     }
 
     isLaunching = true;
     try {
-        const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
+        const executablePath = getChromePath();
+        const userDataDir = path.join(getBaseDir(), 'bot_profile');
+        ensureDir(userDataDir);
 
-        if (!globalBrowser) {
-            const executablePath = getChromePath();
-            if (!executablePath) throw new Error('Edge/Chrome tapılmadı. Zəhmət olmasa Microsoft Edge quraşdırın.');
-
-            const userDataDir = path.join(getBaseDir(), 'esocial_profile');
-            ensureDir(userDataDir);
-
-            globalBrowser = await connectOrLaunchEdge({
-                executablePath,
-                userDataDir,
-                startUrl   : targetUrl,
-                debugPort  : ESOCIAL_DEBUG_PORT,
-                profilePath: userDataDir,
-            });
-        }
-
-        // Mövcud tabları götür
-        let pages = await globalBrowser.pages();
-        
-        // 1. Target URL olan tab varmı?
-        globalEsocialPage = pages.find(p => p.url().includes('e-social.gov.az'));
-
-        // 2. Yoxdursa, ilk tabı hədəf seç
-        if (!globalEsocialPage && pages.length > 0) {
-            globalEsocialPage = pages[0];
-        }
-
-        // 3. Heç tab yoxdursa, yeni aç
-        if (!globalEsocialPage) {
-            globalEsocialPage = await globalBrowser.newPage();
-        }
-
-        // ❗ KRİTİK: Digər bütün artıq tabları dərhal bağla
-        pages = await globalBrowser.pages();
-        for (const p of pages) {
-            if (p !== globalEsocialPage) {
-                try { await p.close(); } catch {}
-            }
-        }
-
-        if (globalEsocialPage) {
-            const curUrl = globalEsocialPage.url();
-            // Əgər tab hələ hədəf saytda deyilsə, yönləndir
-            if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('e-social.gov.az')) {
-                console.log('🔄 [E-Social] Tab yönləndirilir:', targetUrl);
-                await globalEsocialPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-            }
-        }
-
-        // Tab bağlananda referansı sıfırla
-        globalEsocialPage.on('close', () => {
-            console.log('⚠️ [E-Social] Tab bağlandı — növbəti sorğuda yenidən açılacaq');
-            globalEsocialPage = null;
+        globalBrowser = await connectOrLaunchEdge({
+            executablePath,
+            userDataDir,
+            debugPort: DEBUG_PORT,
+            profilePath: userDataDir,
         });
-
-        console.log('✅ [E-Social] Tab hazırdır:', globalEsocialPage.url());
-        return globalEsocialPage;
-    } catch (err) {
-        console.error('❌ [E-Social] Tab açma xətası:', err.message);
-        globalEsocialPage = null;
-        globalBrowser = null;
-        return null;
+        return globalBrowser;
     } finally {
         isLaunching = false;
     }
 }
 
-// ── IMEI Browser ─────────────────────────────────────────────
-// Brauzer + persistent tab qaytarır.
-// Tab yalnız 1 dəfə açılır; sonrakı çağırışlar mövcud tab-ı istifadə edir.
-async function ensureImeiPage() {
-    // Mövcud page-i yoxla
-    if (globalImeiPage) {
-        try {
-            await globalImeiPage.evaluate(() => document.title); // crash test
-            return globalImeiPage;
-        } catch {
-            console.log('⚠️ [IMEI] Köhnə tab bağlanıb, yenisi açılır...');
-            globalImeiPage = null;
-            imeiBrowser    = null;
-        }
-    }
 
-    // Browser yoxlanışı
-    if (imeiBrowser) {
-        try { await imeiBrowser.version(); }
-        catch { imeiBrowser = null; }
-    }
-
-    if (isImeiLaunching) {
-        for (let i = 0; i < 30; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            if (globalImeiPage) return globalImeiPage;
-        }
-        return null;
-    }
-
-    isImeiLaunching = true;
+// ── E-Social Browser ─────────────────────────────────────────
+async function ensureEsocialPage() {
     try {
-        if (!imeiBrowser) {
-            const executablePath = getChromePath();
-            if (!executablePath) throw new Error('Edge/Chrome tapılmadı. Zəhmət olmasa Microsoft Edge quraşdırın.');
-
-            const userDataDir = path.join(getBaseDir(), 'imei_profile');
-            ensureDir(userDataDir);
-
-            imeiBrowser = await connectOrLaunchEdge({
-                executablePath,
-                userDataDir,
-                startUrl   : 'https://ins.mcqs.az/User/LogIn',
-                debugPort  : IMEI_DEBUG_PORT,
-                profilePath: userDataDir,
-            });
+        if (globalEsocialPage) {
+            try { await globalEsocialPage.evaluate(() => document.title); return globalEsocialPage; }
+            catch { globalEsocialPage = null; }
         }
 
-        // Mövcud tabları götür
-        let pages = await imeiBrowser.pages();
-        
-        // 1. Target URL olan tab varmı?
-        globalImeiPage = pages.find(p => p.url().includes('ins.mcqs.az'));
+        const browser = await ensureBrowser();
+        const targetUrl = 'https://eroom.e-social.gov.az/runApp?doc=project.AppEmploymentContractOnline&type=1&menu=AppEmploymentContractOnline_1';
 
-        // 2. Yoxdursa, ilk tabı hədəf seç
-        if (!globalImeiPage && pages.length > 0) {
-            globalImeiPage = pages[0];
+        let pages = await browser.pages();
+        globalEsocialPage = pages.find(p => p.url().includes('e-social.gov.az'));
+
+        if (!globalEsocialPage) {
+            const blankPage = pages.find(p => p.url() === 'about:blank' || p.url() === '');
+            if (blankPage) globalEsocialPage = blankPage;
+            else globalEsocialPage = await browser.newPage();
         }
 
-        // 3. Heç tab yoxdursa, yeni aç
-        if (!globalImeiPage) {
-            globalImeiPage = await imeiBrowser.newPage();
-        }
-
-        // ❗ KRİTİK: Digər bütün artıq tabları dərhal bağla
-        pages = await imeiBrowser.pages();
+        // Artıq tabları təmizlə (yalnız E-Social və IMEI qalsın)
+        pages = await browser.pages();
         for (const p of pages) {
-            if (p !== globalImeiPage) {
+            const url = p.url();
+            const isTarget = url.includes('ins.mcqs.az') || url.includes('e-social.gov.az') || url.includes('mygovid.gov.az') || url.includes('auth');
+            if (p !== globalEsocialPage && p !== globalImeiPage && !isTarget) {
                 try { await p.close(); } catch {}
             }
         }
 
+        const curUrl = globalEsocialPage.url();
+        if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('e-social.gov.az')) {
+            console.log('🔄 [E-Social] Tab yönləndirilir:', targetUrl);
+            await globalEsocialPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        }
+
+        globalEsocialPage.on('close', () => { globalEsocialPage = null; });
+        return globalEsocialPage;
+    } catch (err) {
+        console.error('❌ [E-Social] Tab açma xətası:', err.message);
+        return null;
+    }
+}
+
+// ── IMEI Browser ─────────────────────────────────────────────
+async function ensureImeiPage() {
+    try {
         if (globalImeiPage) {
-            const curUrl = globalImeiPage.url();
-            const targetUrl = 'https://ins.mcqs.az/User/LogIn';
-            if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('ins.mcqs.az')) {
-                console.log('🔄 [IMEI] Tab yönləndirilir:', targetUrl);
-                await globalImeiPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            try { await globalImeiPage.evaluate(() => document.title); return globalImeiPage; }
+            catch { globalImeiPage = null; }
+        }
+
+        const browser = await ensureBrowser();
+        const targetUrl = 'https://ins.mcqs.az/User/LogIn';
+
+        let pages = await browser.pages();
+        globalImeiPage = pages.find(p => p.url().includes('ins.mcqs.az'));
+
+        if (!globalImeiPage) {
+            const blankPage = pages.find(p => p.url() === 'about:blank' || p.url() === '');
+            if (blankPage) globalImeiPage = blankPage;
+            else globalImeiPage = await browser.newPage();
+        }
+
+        // Artıq tabları təmizlə
+        pages = await browser.pages();
+        for (const p of pages) {
+            const url = p.url();
+            const isTarget = url.includes('ins.mcqs.az') || url.includes('e-social.gov.az') || url.includes('mygovid.gov.az') || url.includes('auth');
+            if (p !== globalImeiPage && p !== globalEsocialPage && !isTarget) {
+                try { await p.close(); } catch {}
             }
         }
 
-        // Tab bağlananda referansı sıfırla
-        globalImeiPage.on('close', () => {
-            console.log('⚠️ [IMEI] Tab bağlandı — növbəti sorğuda yenidən açılacaq');
-            globalImeiPage = null;
-        });
+        const curUrl = globalImeiPage.url();
+        if (curUrl === 'about:blank' || curUrl === '' || !curUrl.includes('ins.mcqs.az')) {
+            console.log('🔄 [IMEI] Tab yönləndirilir:', targetUrl);
+            await globalImeiPage.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        }
 
-        console.log('✅ [IMEI] Tab hazırdır:', globalImeiPage.url());
+        globalImeiPage.on('close', () => { globalImeiPage = null; });
         return globalImeiPage;
     } catch (err) {
         console.error('❌ [IMEI] Tab açma xətası:', err.message);
-        globalImeiPage = null;
-        imeiBrowser    = null;
         return null;
-    } finally {
-        isImeiLaunching = false;
     }
 }
 
