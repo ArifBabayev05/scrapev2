@@ -23,31 +23,39 @@ const AGENT_SECRET = process.env.AGENT_SECRET  || 'bot-secret-2024';
 const AGENT_LABEL  = process.env.AGENT_LABEL   || require('os').hostname();
 
 // ── Chrome path ──────────────────────────────────────────────
-// Edge — Windows 10/11-də həmişə quraşdırılmış gəlir, yeri sabitdir.
-// Chrome — əlavə quraşdırılıbsa fallback kimi.
+// Edge — Windows 10/11-də həmişə quraşdırılmış gəlir.
+// Chrome — Edge tapılmasa fallback kimi.
+// Sabit yol yazmaq əvəzinə Windows mühit dəyişənlərindən istifadə edirik —
+// disk hərfi (C:\ deyil D:\) fərqli olan sistemlərdə də işləyir.
 const getChromePath = () => {
-    const home = require('os').homedir();
-    const candidates = [
-        // ── Microsoft Edge (tövsiyə edilir — default Windows brauzeri) ──
-        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-        path.join(home, 'AppData', 'Local', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    const home    = require('os').homedir();
+    const pf86    = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    const pf64    = process.env['ProgramFiles']       || 'C:\\Program Files';
+    const appdata = process.env['LOCALAPPDATA']       || path.join(home, 'AppData', 'Local');
 
-        // ── Google Chrome (fallback) ──
-        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-        path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    const candidates = [
+        // ── Microsoft Edge (priority — Windows-da default quraşdırılır) ──
+        path.join(pf86,    'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+        path.join(pf64,    'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+        path.join(appdata, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+
+        // ── Google Chrome (fallback — əgər Edge tapılmasa) ──
+        path.join(pf64,    'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(pf86,    'Google', 'Chrome', 'Application', 'chrome.exe'),
+        path.join(appdata, 'Google', 'Chrome', 'Application', 'chrome.exe'),
     ];
+
     for (const p of candidates) {
         if (fs.existsSync(p)) {
-            const name = p.includes('msedge') ? 'Edge' : 'Chrome';
+            const name = p.toLowerCase().includes('msedge') ? '🟦 Edge' : '🟡 Chrome';
             console.log(`✅ ${name} tapıldı: ${p}`);
             return p;
         }
     }
-    console.error('❌ Nə Edge, nə də Chrome tapıldı!');
+    console.error('❌ Nə Edge, nə də Chrome tapıldı! Yollar yoxlanılmış:', candidates);
     return null;
 };
+
 
 
 // ── Base dir ─────────────────────────────────────────────────
