@@ -20,8 +20,25 @@ const PORT         = process.env.PORT         || 3000;
 const AGENT_SECRET = process.env.AGENT_SECRET || 'bot-secret-2024';
 
 // ── Middleware ──────────────────────────────────────────────
-app.use(cors({ origin: true }));
+// ── CORS — browser tərəfindən gondərilən preflight OPTIONS-ı də həll et
+const corsOptions = {
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));  // preflight üçün bütün route-lar
+
+// JSON body parser + parse xətasını JSON olaraq qaytar (HTML deyil)
 app.use(express.json());
+app.use((err, req, res, next) => {
+    if (err.type === 'entity.parse.failed' || err.status === 400) {
+        return res.status(400).json({ error: 'Yararlısız JSON body', detail: err.message });
+    }
+    next(err);
+});
+
+// Request log
 app.use((req, _res, next) => {
     console.log(`[${new Date().toLocaleString()}] ${req.method} ${req.url}`);
     next();
@@ -196,6 +213,17 @@ app.post('/api/check-imei', async (req, res) => {
     } catch (err) {
         res.status(err.code || 500).json({ error: err.message });
     }
+});
+
+// ── 404 və global xəta handler ──────────────────────────────
+// Railway-nin HTML səhifələri əvəzinə həmişə JSON qaytar
+app.use((req, res) => {
+    res.status(404).json({ error: `Route tapilmadi: ${req.method} ${req.url}` });
+});
+
+app.use((err, req, res, _next) => {
+    console.error('Express xətası:', err.message);
+    res.status(500).json({ error: err.message || 'Daxili server xətası' });
 });
 
 // ── Server Start ─────────────────────────────────────────────
