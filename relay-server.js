@@ -51,11 +51,11 @@ const agents = new Map();
 const pendingJobs = new Map();
 
 // ── Helpers ─────────────────────────────────────────────────
-// ATOMİK agent tap+rezerv. targetLabel varsa yalnız həmin agent seçilir.
+// ATOMİK agent tap+rezerv. targetLabel MUTLƏQ verilməlidir.
 function tryClaimAgent(targetLabel) {
     for (const [agentId, agent] of agents) {
         if (!agent.busy && agent.ws.readyState === WebSocket.OPEN) {
-            if (targetLabel && agent.label !== targetLabel) continue;
+            if (agent.label !== targetLabel) continue;
             agent.busy = true;
             return { agentId, agent };
         }
@@ -376,10 +376,16 @@ require(path.join(DIR, 'launcher.js'));
     res.type('application/javascript').send(script);
 });
 
-// E-Social scrape — agentLabel ilə userin öz agentine yönləndirilir
+// E-Social scrape — agentLabel MÜTLƏQDİR, hər user yalnız öz agentinə göndərir
 app.post('/api/scrape', async (req, res) => {
     try {
         const { agentLabel, ...payload } = req.body;
+        if (!agentLabel) {
+            return res.status(400).json({
+                error: 'agentLabel mutleqdir. Request body-de agentLabel gosterin.',
+                example: { agentLabel: 'HOSTNAME', fin: '...', sv: '...' }
+            });
+        }
         const result = await sendJobToAgent('scrape', payload, agentLabel);
         res.json(result);
     } catch (err) {
@@ -387,10 +393,16 @@ app.post('/api/scrape', async (req, res) => {
     }
 });
 
-// IMEI check — agentLabel ilə userin öz agentine yönləndirilir
+// IMEI check — agentLabel MÜTLƏQDİR
 app.post('/api/check-imei', async (req, res) => {
     try {
         const { agentLabel, ...payload } = req.body;
+        if (!agentLabel) {
+            return res.status(400).json({
+                error: 'agentLabel mutleqdir. Request body-de agentLabel gosterin.',
+                example: { agentLabel: 'HOSTNAME', imei: '...' }
+            });
+        }
         const result = await sendJobToAgent('check-imei', payload, agentLabel);
         res.json(result);
     } catch (err) {
